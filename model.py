@@ -98,7 +98,7 @@ class BaseModel(nn.Module):
         vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
         
         
-        if self.model_type == 'flow-matching':
+        if self.model_type == 'flow-matching': # DP
             action_with_noise = torch.randn(B, self.num_action_chunk, self.dim_actions,
                                             device = images.device)
             for i in range(steps, 0, -1):
@@ -110,18 +110,18 @@ class BaseModel(nn.Module):
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
                 action_with_noise = action_with_noise - pred_action / time.view(B, 1, 1) / steps
-        elif self.model_type == 'discrete':
+        elif self.model_type == 'discrete': # Auto-regressive model
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
                     language_feature = encoded_language,
                     proprio = proprio).view(B, self.num_action_chunk, self.dim_actions, self.num_bins).argmax(dim=-1)
             
-        elif self.model_type == 'continuous':
-            return self.decoder(      
+        elif self.model_type == 'continuous': # ACT
+            pred_action = self.decoder(      
                     visual_feature = vision_embedding,
                     language_feature = encoded_language,
                     proprio = proprio)
-
+        return pred_action
 
     
 

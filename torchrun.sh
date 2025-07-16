@@ -6,10 +6,10 @@ port=13553
 
 
 torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --master-port=$port train.py \
-  --model HFP_large \
+  --model_type continuous \
   --batch-size 1 \
   --learning_rate 1e-4 \
   --precision fp16 \
   --port $port \
   --output_dir runnings/RoboTwin \
-  --metas_path /home/dodo/fyc/HeteroDiffusionPolicy/HeteroFlowPolicy/datasets/meta_files/robotwin.jsonl
+  --metas_path /home/fyc/EmpiricalStudyForVLA/datasets/meta_files/robotwin.jsonl  > ./log/log_train.txt 2>&1
