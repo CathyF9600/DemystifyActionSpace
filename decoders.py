@@ -160,8 +160,8 @@ class MlpDecoder(nn.Module):
                  dim_visual = 512,
                  dim_language = 768,
                  num_views = 3,
-                 dim_actions = 14,
-                 dim_proprio = 14,
+                 dim_actions = 20,
+                 dim_proprio = 20,
                  num_action_chunk = 5,
                  num_bins = 256
                  ):

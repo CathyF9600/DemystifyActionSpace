@@ -110,7 +110,6 @@ def main(args):
         betas=(0.9, 0.95)
     )
     
-    # 准备模型和优化器用于分布式训练
     model, optim = accelerator.prepare(model, optim)
     if args.resume is not None:
         accelerator.print('>>>>>> resume from {}'.format(args.resume))
@@ -123,47 +122,37 @@ def main(args):
     for iters in range(args.iters):
         past_time = time.time()
         data = next(train_dataloader)
-        
-        # 移动数据到设备
-        images = data['image_input'].to(accelerator.device)  # (B, V, C, H, W)
-        language_instructions = data['language_instruction']  # List of strings (B,)
-        proprio = data['proprio'].to(accelerator.device)  # (B, dim_proprio)
-        actions = data['actions'].to(accelerator.device)  # (B, N, dim_actions)
-        
-        # 编码语言指令 (无梯度)
-        with torch.no_grad():
-            encoded_language = lang_encoder(language_instructions)  # (B, 768)
-        encoded_language = encoded_language.to(accelerator.device)
-        
+        torch.distributed.barrier()
+        # language_instruction = text_processor.encode_language(data['language_instruction'])
+        # print('*******', data.keys())
+        language_instruction = lang_encoder(data['language_instruction']) 
+        del data['language_instruction']
+        # inputs = {
+        #     **{key: value.cuda(non_blocking=True) for key, value in data.items()},
+        #     **{key: value.cuda(non_blocking=True) for key, value in language_instruction.items()}
+        # }
+        inputs = {
+            **{key: value.cuda(non_blocking=True) for key, value in data.items()},
+            "encoded_language": language_instruction.cuda(non_blocking=True)  # 关键修改
+        }
         optim.zero_grad()
-        loss = model(
-            images=images,
-            encoded_language=encoded_language,
-            proprio=proprio,
-            actions=actions
-        )
-        
+        # print('inputs', inputs.keys())
+        loss_dict, log_dict = model(**inputs)
+        loss = sum(loss_dict.values())
         accelerator.backward(loss)
         optim.step()
-        
-        # 日志记录
+        #### log
+        # loss_dict = {key: value.item() for key, value in loss_dict.items()}
         if iters % args.log_interval == 0: 
-            log_dict = {
-                "loss": loss.item(),
-                "learning_rate": optim.param_groups[0]["lr"],
-                "time_per_iter": time.time() - past_time
-            }
+            # accelerator.log(loss_dict, step=iters)
             accelerator.log(log_dict, step=iters)
-            accelerator.print(f"[Iter {iters}] [Training Loss] {loss.item():.6f} [time_per_iter] {time.time() - past_time:.3f}")
-        
-        # Save checkpoint
+            accelerator.print(f"[Iter {iters}] [Training Loss] {loss.item()} [time_per_iter] {time.time() - past_time}")
         if iters % args.save_interval == 0 and iters != 0:
             accelerator.print("========start saving models=========")
             accelerator.save_state(os.path.join(output_dir, f"ckpt-{iters}"))
-        
         torch.distributed.barrier()
-    
     accelerator.save_state(os.path.join(output_dir, f"ckpt-final"))
+
 
 def slurm_env_init(args):
     args.rank = int(os.environ.get('RANK', 0))

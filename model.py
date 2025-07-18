@@ -15,7 +15,10 @@ class language_encoder(nn.Module):
         
     @torch.no_grad()
     def forward(self, language_inputs: List[str]):
-        inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")
+        inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")        
+        # 2. 将输入张量移动到模型所在的设备（关键修复）
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        
         return self.model(**inputs).pooler_output
 
 class BaseModel(nn.Module):
@@ -24,8 +27,8 @@ class BaseModel(nn.Module):
                  model_type = "continuous",
                  decoder_name = "mlp_decoder_base",
                  dim_language = 768,
-                 dim_proprio = 14,
-                 dim_actions = 14, 
+                 dim_proprio = 20, # 14 for euler angles
+                 dim_actions = 20, # 14 for euler angles
                  num_action_chunk = 10,
                  num_bins = 256, ## for discrete policy only
                  **kwargs
@@ -39,7 +42,7 @@ class BaseModel(nn.Module):
         self.vision_backbone = create_model(vision_backbone, pretrained=True)
         del self.vision_backbone.fc
         self.decoder = create_model(decoder_name,
-                                    model_type == model_type,
+                                    model_type = model_type,
                                     dim_visual = self.vision_backbone.num_features,
                                     dim_language = dim_language,
                                     dim_proprio = dim_proprio,
@@ -51,12 +54,20 @@ class BaseModel(nn.Module):
         else: self.loss = nn.MSELoss()
         
         
+    # def forward(self,
+    #             images: torch.Tensor, # B V C H W
+    #             encoded_language: torch.Tensor, # B C
+    #             proprio: torch.Tensor,
+    #             actions: torch.Tensor # B N dim_action // B N for discrete
+    #         ):
     def forward(self,
-                images: torch.Tensor, # B V C H W
+                images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
-                proprio: torch.Tensor,
-                actions: torch.Tensor # B N dim_action // B N for discrete
-            ):
+                abs_eef: torch.Tensor):
+        print('abs_eef', abs_eef.shape)
+        actions = abs_eef[:, 1:] # 0~19: abs future eef
+        proprio = abs_eef[:, 0] + torch.randn_like(abs_eef[:, 0]) * 0.05 # augmentation
+        
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -68,7 +79,9 @@ class BaseModel(nn.Module):
             t = (torch.rand(1, device=images.device) + torch.arange(images.shape[0], device=images.device) / images.shape[0]) % (1 - 1e-5)
             noise = torch.randn_like(actions)
             noise_action = noise * t.view(-1, 1, 1) + actions * (1 - t).view(-1, 1, 1)
-        
+        print('******', vision_embedding.shape, encoded_language.shape)
+        print(proprio.shape, noise_action.shape, t.shape)
+
         output_action = self.decoder(
             visual_feature = vision_embedding,
             language_feature = encoded_language,
@@ -78,6 +91,7 @@ class BaseModel(nn.Module):
         )
         
         if self.model_type == 'flow-matching': 
+            print('output_action', output_action.shape, actions.shape)
             return self.loss(output_action, noise - actions)
         elif self.model_type == 'discrete':
             return self.loss(output_action.view(-1, self.num_bins), actions.view(-1))
