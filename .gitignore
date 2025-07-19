@@ -2,4 +2,4 @@ __pycache__/
 log/
 EmpiricalStudyForVLA.egg-info/
 *.txt
-runnings/
+runnings/*
