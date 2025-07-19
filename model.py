@@ -53,18 +53,12 @@ class BaseModel(nn.Module):
         if model_type == 'discrete': self.loss = nn.CrossEntropyLoss()
         else: self.loss = nn.MSELoss()
         
-        
-    # def forward(self,
-    #             images: torch.Tensor, # B V C H W
-    #             encoded_language: torch.Tensor, # B C
-    #             proprio: torch.Tensor,
-    #             actions: torch.Tensor # B N dim_action // B N for discrete
-    #         ):
+
     def forward(self,
                 images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
                 abs_eef: torch.Tensor):
-        print('abs_eef', abs_eef.shape)
+        # print('abs_eef', abs_eef.shape)
         actions = abs_eef[:, 1:] # 0~19: abs future eef
         proprio = abs_eef[:, 0] + torch.randn_like(abs_eef[:, 0]) * 0.05 # augmentation
         
@@ -79,8 +73,8 @@ class BaseModel(nn.Module):
             t = (torch.rand(1, device=images.device) + torch.arange(images.shape[0], device=images.device) / images.shape[0]) % (1 - 1e-5)
             noise = torch.randn_like(actions)
             noise_action = noise * t.view(-1, 1, 1) + actions * (1 - t).view(-1, 1, 1)
-        print('******', vision_embedding.shape, encoded_language.shape)
-        print(proprio.shape, noise_action.shape, t.shape)
+        # print('******', vision_embedding.shape, encoded_language.shape)
+        # print(proprio.shape, noise_action.shape, t.shape)
 
         output_action = self.decoder(
             visual_feature = vision_embedding,
@@ -91,7 +85,7 @@ class BaseModel(nn.Module):
         )
         
         if self.model_type == 'flow-matching': 
-            print('output_action', output_action.shape, actions.shape)
+            # print('output_action', output_action.shape, actions.shape)
             return self.loss(output_action, noise - actions)
         elif self.model_type == 'discrete':
             return self.loss(output_action.view(-1, self.num_bins), actions.view(-1))

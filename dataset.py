@@ -82,7 +82,6 @@ class InfiniteDataReader(IterableDataset):
         else: meta_files, metas_path = [metas_path], ""
         for file in meta_files:
             with io.BytesIO(fileio.get(fileio.join_path(metas_path, file))) as f:
-                print('```````f', f)
                 meta = json.load(f)
                 print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
                 random.shuffle(meta['datalist'])
@@ -189,20 +188,19 @@ class InfiniteDataReader(IterableDataset):
         while True:
             for i in range(len(generators)):
                 def get_next_item():
-                    # try: return next(generators[i])
-                    # except StopIteration:
-                    #     idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                    #     generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                    #     return get_next_item()
-                    # except Exception as e:
-                    #     meta = self.metas[dataset_names[i]]
-                    #     with open("error_data.log", "a+") as f:
-                    #         f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
-                    #     print(meta['datalist'][idx[i]], f':{e}')
-                    #     idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                    #     generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                    #     return get_next_item()
-                    return next(generators[i])
+                    try: return next(generators[i])
+                    except StopIteration:
+                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
+                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
+                        return get_next_item()
+                    except Exception as e:
+                        meta = self.metas[dataset_names[i]]
+                        with open("error_data.log", "a+") as f:
+                            f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
+                        print(meta['datalist'][idx[i]], f':{e}')
+                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
+                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
+                        return get_next_item()
                 yield get_next_item()
 
 

@@ -73,7 +73,7 @@ def main(args):
         model_type=args.model_type,
         decoder_name=args.decoder_name,
         num_action_chunk=args.num_actions,
-        dim_actions=14  # Matches dataset's action dimension
+        dim_actions=20  # Matches dataset's action dimension
     )
     model.to(accelerator.device)
     
@@ -89,7 +89,7 @@ def main(args):
         world_size=accelerator.num_processes,
         batch_size=args.batch_size,
         metas_path=args.metas_path,
-        num_actions=args.num_actions
+        num_actions=args.num_actions+1
     )
     
     model = model.to(torch.float32)
@@ -98,16 +98,22 @@ def main(args):
     encoder_params = list(map(id, model.vision_backbone.parameters())) 
     other_params = filter(lambda p: id(p) not in encoder_params, model.parameters()) 
 
-    optim = torch.optim.AdamW([
-            {'params': model.vision_backbone.parameters(), 
-                'lr': args.learning_rate * args.learning_coef,
-                'weight_decay': args.weight_decay * args.learning_coef},
+    # optim = torch.optim.AdamW([
+    #         {'params': model.vision_backbone.parameters(), 
+    #             'lr': args.learning_rate * args.learning_coef,
+    #             'weight_decay': args.weight_decay * args.learning_coef},
             
-            {'params': other_params,  
-                'lr': args.learning_rate,
-                'weight_decay': args.weight_decay}
-        ],
-        betas=(0.9, 0.95)
+    #         {'params': other_params,  
+    #             'lr': args.learning_rate,
+    #             'weight_decay': args.weight_decay}
+    #     ],
+    #     betas=(0.9, 0.95)
+    # )
+    optim = torch.optim.AdamW(
+        model.parameters(), 
+        lr=args.learning_rate,
+        betas=(0.9, 0.95),
+        weight_decay=args.weight_decay
     )
     
     model, optim = accelerator.prepare(model, optim)
@@ -133,19 +139,19 @@ def main(args):
         # }
         inputs = {
             **{key: value.cuda(non_blocking=True) for key, value in data.items()},
-            "encoded_language": language_instruction.cuda(non_blocking=True)  # 关键修改
+            "encoded_language": language_instruction.cuda(non_blocking=True)
         }
         optim.zero_grad()
         # print('inputs', inputs.keys())
-        loss_dict, log_dict = model(**inputs)
-        loss = sum(loss_dict.values())
+        loss = model(**inputs)
+        # loss = sum(loss_dict.values())
         accelerator.backward(loss)
         optim.step()
         #### log
         # loss_dict = {key: value.item() for key, value in loss_dict.items()}
         if iters % args.log_interval == 0: 
             # accelerator.log(loss_dict, step=iters)
-            accelerator.log(log_dict, step=iters)
+            accelerator.log({'loss': loss.item()}, step=iters)
             accelerator.print(f"[Iter {iters}] [Training Loss] {loss.item()} [time_per_iter] {time.time() - past_time}")
         if iters % args.save_interval == 0 and iters != 0:
             accelerator.print("========start saving models=========")
