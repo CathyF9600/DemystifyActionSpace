@@ -27,7 +27,7 @@ class BaseModel(nn.Module):
                  model_type = "continuous",
                  decoder_name = "mlp_decoder_base",
                  dim_language = 768,
-                 dim_proprio = 20, # 14 for euler angles
+                 dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                  dim_actions = 20, # 14 for euler angles
                  num_action_chunk = 10,
                  num_bins = 256, ## for discrete policy only
@@ -57,10 +57,10 @@ class BaseModel(nn.Module):
     def forward(self,
                 images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
-                abs_eef: torch.Tensor):
-        # print('abs_eef', abs_eef.shape)
-        actions = abs_eef[:, 1:] # 0~19: abs future eef
-        proprio = abs_eef[:, 0] + torch.randn_like(abs_eef[:, 0]) * 0.05 # augmentation
+                action_seq: torch.Tensor):
+        # print('action_seq', action_seq.shape)
+        actions = action_seq[:, 1:] # 0~19: abs future eef
+        proprio = action_seq[:, 0] + torch.randn_like(action_seq[:, 0]) * 0.05 # augmentation
         
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W

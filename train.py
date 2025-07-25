@@ -38,6 +38,7 @@ def get_args_parser():
     # Resume & Checkpoint Save & evaluation parameters
     parser.add_argument('--save_interval', default=20000, type=int)
     parser.add_argument('--log_interval', default=10, type=int)
+    parser.add_argument('--dim_actions', default=20, type=int)
     
     parser.add_argument('--output_dir', default='runnings/',
                         help='path where to save, empty for no saving')
@@ -73,7 +74,7 @@ def main(args):
         model_type=args.model_type,
         decoder_name=args.decoder_name,
         num_action_chunk=args.num_actions,
-        dim_actions=20  # Matches dataset's action dimension
+        dim_actions=args.dim_actions  # Matches dataset's action dimension
     )
     model.to(accelerator.device)
     
