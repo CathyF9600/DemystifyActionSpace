@@ -159,7 +159,7 @@ class InfiniteDataReader(IterableDataset):
                     right_joint,                    # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                # print('********* abs_joint.shape *********', abs_joint.shape)
+                print('********* action_seq.shape *********', action_seq.shape, left_joint.shape, left_grip.shape)
                 index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
             # elif dataset_name == 'robotwin2_abs_ee':
 
