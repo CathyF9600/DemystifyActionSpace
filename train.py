@@ -38,7 +38,9 @@ def get_args_parser():
     # Resume & Checkpoint Save & evaluation parameters
     parser.add_argument('--save_interval', default=20000, type=int)
     parser.add_argument('--log_interval', default=10, type=int)
-    
+    parser.add_argument('--dim_actions', default=20, type=int)
+    parser.add_argument('--dim_proprio', default=20, type=int)
+
     parser.add_argument('--output_dir', default='runnings/',
                         help='path where to save, empty for no saving')
     
@@ -73,7 +75,8 @@ def main(args):
         model_type=args.model_type,
         decoder_name=args.decoder_name,
         num_action_chunk=args.num_actions,
-        dim_actions=14  # Matches dataset's action dimension
+        dim_actions=args.dim_actions,  # Matches dataset's action dimension
+        dim_proprio=args.dim_proprio
     )
     model.to(accelerator.device)
     
@@ -89,7 +92,7 @@ def main(args):
         world_size=accelerator.num_processes,
         batch_size=args.batch_size,
         metas_path=args.metas_path,
-        num_actions=args.num_actions
+        num_actions=args.num_actions+1
     )
     
     model = model.to(torch.float32)
@@ -98,6 +101,17 @@ def main(args):
     encoder_params = list(map(id, model.vision_backbone.parameters())) 
     other_params = filter(lambda p: id(p) not in encoder_params, model.parameters()) 
 
+    # optim = torch.optim.AdamW([
+    #         {'params': model.vision_backbone.parameters(), 
+    #             'lr': args.learning_rate * args.learning_coef,
+    #             'weight_decay': args.weight_decay * args.learning_coef},
+            
+    #         {'params': other_params,  
+    #             'lr': args.learning_rate,
+    #             'weight_decay': args.weight_decay}
+    #     ],
+    #     betas=(0.9, 0.95)
+    # )
     optim = torch.optim.AdamW(
         model.parameters(), 
         lr=args.learning_rate,
@@ -128,7 +142,7 @@ def main(args):
         # }
         inputs = {
             **{key: value.cuda(non_blocking=True) for key, value in data.items()},
-            "encoded_language": language_instruction.cuda(non_blocking=True)  # 关键修改
+            "encoded_language": language_instruction.cuda(non_blocking=True)
         }
         optim.zero_grad()
         # print('inputs', inputs.keys())

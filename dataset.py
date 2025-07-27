@@ -82,7 +82,6 @@ class InfiniteDataReader(IterableDataset):
         else: meta_files, metas_path = [metas_path], ""
         for file in meta_files:
             with io.BytesIO(fileio.get(fileio.join_path(metas_path, file))) as f:
-                print('```````f', f)
                 meta = json.load(f)
                 print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
                 random.shuffle(meta['datalist'])
@@ -112,27 +111,27 @@ class InfiniteDataReader(IterableDataset):
             # ins = data[meta["language_instruction_key"]][()].decode() if len(data[meta["language_instruction_key"]].shape) == 0 else \
             #         data[meta["language_instruction_key"]][0].decode()
             
-            if dataset_name == 'RoboTwin':
+            if dataset_name == 'robotwin2_abs_ee':
                 freq = 30  # adjust if needed
-                left_ee_o = data["endpose/left_endpose"][()]      # shape (T, 7)
-                right_ee_o = data["endpose/right_endpose"][()]    # shape (T, 7)
+                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
+                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
                 # 重新排列列：[x,y,z,w,rx,ry,rz] → [x,y,z,rx,ry,rz,w]
-                left_ee = np.column_stack((
-                    left_ee_o[:, :3],  # x,y,z
-                    left_ee_o[:, 4:],  # rx,ry,rz
-                    left_ee_o[:, 3]    # w
-                ))
+                # left_ee = np.column_stack((
+                #     left_ee_o[:, :3],  # x,y,z
+                #     left_ee_o[:, 4:],  # rx,ry,rz
+                #     left_ee_o[:, 3]    # w
+                # ))
 
-                right_ee = np.column_stack((
-                    right_ee_o[:, :3],
-                    right_ee_o[:, 4:],
-                    right_ee_o[:, 3]
-                ))
+                # right_ee = np.column_stack((
+                #     right_ee_o[:, :3],
+                #     right_ee_o[:, 4:],
+                #     right_ee_o[:, 3]
+                # ))
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
                 right_grip = data["endpose/right_gripper"][()]  # shape (T,)
                 left_grip = 1 - left_grip * 2
                 right_grip = 1 - right_grip * 2
-                abs_eef = np.concatenate([
+                action_seq = np.concatenate([
                     left_ee[:, :3],
                     quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
                     left_grip[:, None],             # (T,1)
@@ -144,8 +143,26 @@ class InfiniteDataReader(IterableDataset):
                 # abs_eef = np.concatenate([abs_eef], axis=-1)  # now (T, 32)
                 # print("abs_eef", abs_eef)
                 # import pdb; pdb.set_trace()
+                index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
 
-                index_list = list(range(0, abs_eef.shape[0] - 15))  # or adjust your window length as needed
+            elif dataset_name == 'robotwin2_abs_qpos':
+                freq = 30  # adjust if needed
+                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
+                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+                action_seq = np.concatenate([
+                    left_joint,                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_joint,                    # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                print('********* action_seq.shape *********', action_seq.shape, left_joint.shape, left_grip.shape)
+                index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
+            # elif dataset_name == 'robotwin2_abs_ee':
+
             else: raise NotImplementedError
             
             random.shuffle(index_list)
@@ -157,7 +174,7 @@ class InfiniteDataReader(IterableDataset):
                 ins = random.choice(self.language_aug["seen"])
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
-                action = abs_eef[idx:min(idx+freq, abs_eef.shape[0])]
+                action = action_seq[idx:min(idx+freq, action_seq.shape[0])]
                 
                 action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
                 # images: torch.Tensor, # B V C H W
@@ -168,7 +185,7 @@ class InfiniteDataReader(IterableDataset):
                     # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
                     'images': image_input,
                     'language_instruction': ins,
-                    'abs_eef': torch.tensor(action).to(torch.float32)
+                    'action_seq': torch.tensor(action).to(torch.float32)
                     }
                 
                 yield items
@@ -189,20 +206,19 @@ class InfiniteDataReader(IterableDataset):
         while True:
             for i in range(len(generators)):
                 def get_next_item():
-                    # try: return next(generators[i])
-                    # except StopIteration:
-                    #     idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                    #     generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                    #     return get_next_item()
-                    # except Exception as e:
-                    #     meta = self.metas[dataset_names[i]]
-                    #     with open("error_data.log", "a+") as f:
-                    #         f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
-                    #     print(meta['datalist'][idx[i]], f':{e}')
-                    #     idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                    #     generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                    #     return get_next_item()
-                    return next(generators[i])
+                    try: return next(generators[i])
+                    except StopIteration:
+                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
+                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
+                        return get_next_item()
+                    except Exception as e:
+                        meta = self.metas[dataset_names[i]]
+                        with open("error_data.log", "a+") as f:
+                            f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
+                        print(meta['datalist'][idx[i]], f':{e}')
+                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
+                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
+                        return get_next_item()
                 yield get_next_item()
 
 
