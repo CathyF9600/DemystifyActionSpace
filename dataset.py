@@ -43,6 +43,12 @@ def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
 def euler_xyz_to_rotate6D(q: np.ndarray) -> np.ndarray:
     return R.from_euler('xyz', q, degrees=False).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
 
+def cal_delta_rotate(q1, q2):
+    q1 = R.from_quat(q1)
+    q2 = R.from_quat(q2)
+    del_rotate = q1 * q2.inv()
+    return del_rotate.as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
+
 def convert_hdf5_to_json(hdf5_path): # for RoboTwin
     # 替换基础目录
     json_path = hdf5_path.replace("/downloaded_data/", "/instruction_data/")
@@ -115,18 +121,6 @@ class InfiniteDataReader(IterableDataset):
                 freq = 30  # adjust if needed
                 left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
-                # 重新排列列：[x,y,z,w,rx,ry,rz] → [x,y,z,rx,ry,rz,w]
-                # left_ee = np.column_stack((
-                #     left_ee_o[:, :3],  # x,y,z
-                #     left_ee_o[:, 4:],  # rx,ry,rz
-                #     left_ee_o[:, 3]    # w
-                # ))
-
-                # right_ee = np.column_stack((
-                #     right_ee_o[:, :3],
-                #     right_ee_o[:, 4:],
-                #     right_ee_o[:, 3]
-                # ))
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
                 right_grip = data["endpose/right_gripper"][()]  # shape (T,)
                 left_grip = 1 - left_grip * 2
@@ -139,6 +133,8 @@ class InfiniteDataReader(IterableDataset):
                     quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
+                prorpio_seq = action_seq
+                action_seq = action_seq[1:]
                 # Create zero padding same shape as abs_eef for compatibility
                 # abs_eef = np.concatenate([abs_eef], axis=-1)  # now (T, 32)
                 # print("abs_eef", abs_eef)
@@ -159,10 +155,30 @@ class InfiniteDataReader(IterableDataset):
                     right_joint,                    # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                print('********* action_seq.shape *********', action_seq.shape, left_joint.shape, left_grip.shape)
+                prorpio_seq = action_seq
+                action_seq = action_seq[1:]
+                # print('********* action_seq.shape *********', action_seq.shape, left_joint.shape, left_grip.shape)
                 index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
-            # elif dataset_name == 'robotwin2_abs_ee':
-
+            elif dataset_name == 'robotwin2_rel_ee':
+                freq = self.num_actions  # adjust if needed
+                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
+                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
+                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
+                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+                action_seq = np.concatenate([
+                    left_ee[:, :3],
+                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_ee[:, :3],
+                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                # Compute relative action sequence: rel_t = action_{t+1} - action_t
+                prorpio_seq = action_seq
+                action_seq = action_seq[1:] - action_seq[:-1]  # shape (T-1, 20)
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))
             else: raise NotImplementedError
             
             random.shuffle(index_list)
@@ -175,17 +191,19 @@ class InfiniteDataReader(IterableDataset):
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
                 action = action_seq[idx:min(idx+freq, action_seq.shape[0])]
-                
-                action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
+                if dataset_name == 'robotwin2_abs_ee' or dataset_name == 'robotwin2_abs_qpos':
+                    action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
                 # images: torch.Tensor, # B V C H W
                 # encoded_language: torch.Tensor, # B C
                 # proprio: torch.Tensor,
                 # actions: torch.Tensor 
+                # print('******* action.shape', action.shape)
                 items = {
                     # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
                     'images': image_input,
                     'language_instruction': ins,
-                    'action_seq': torch.tensor(action).to(torch.float32)
+                    'action_seq': torch.tensor(action).to(torch.float32),
+                    'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                     }
                 
                 yield items

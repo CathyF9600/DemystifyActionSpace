@@ -15,6 +15,7 @@ from model import BaseModel, language_encoder
 from timm import create_model
 from safetensors.torch import load_file
 from accelerate.utils import DistributedDataParallelKwargs
+import wandb
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Training script', add_help=False)
@@ -92,7 +93,7 @@ def main(args):
         world_size=accelerator.num_processes,
         batch_size=args.batch_size,
         metas_path=args.metas_path,
-        num_actions=args.num_actions+1
+        num_actions=args.num_actions
     )
     
     model = model.to(torch.float32)
@@ -154,6 +155,12 @@ def main(args):
         # loss_dict = {key: value.item() for key, value in loss_dict.items()}
         if iters % args.log_interval == 0: 
             # accelerator.log(loss_dict, step=iters)
+            rank = int(os.environ.get("RANK", 0))
+            if rank == 0:
+                wandb.log({
+                    "loss": loss.item(),
+                    # **{f"log/{k}": v for k, v in log_dict.items()}
+                }, step=iters)
             accelerator.log({'loss': loss.item()}, step=iters)
             accelerator.print(f"[Iter {iters}] [Training Loss] {loss.item()} [time_per_iter] {time.time() - past_time}")
         if iters % args.save_interval == 0 and iters != 0:
@@ -193,5 +200,13 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-        
+    import os
+    rank = int(os.environ.get("RANK", 0))
+    print('rank', rank)
+    if rank == 0:
+        wandb.init(
+            project="EmpiricalStudyForVLA",
+            name="robotwin2_abs_qpos",
+            config=vars(args)
+        )
     main(slurm_env_init(args))

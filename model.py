@@ -57,10 +57,11 @@ class BaseModel(nn.Module):
     def forward(self,
                 images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
+                proprio: torch.Tensor, # B C
                 action_seq: torch.Tensor):
         # print('action_seq', action_seq.shape)
-        actions = action_seq[:, 1:] # 0~19: abs future eef
-        proprio = action_seq[:, 0] + torch.randn_like(action_seq[:, 0]) * 0.05 # augmentation
+        # actions = action_seq[:, 1:] # 0~19: abs future eef
+        proprio = proprio + torch.randn_like(proprio) * 0.01 # augmentation
         
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
@@ -71,8 +72,8 @@ class BaseModel(nn.Module):
         t = None
         if self.model_type == 'flow-matching':
             t = (torch.rand(1, device=images.device) + torch.arange(images.shape[0], device=images.device) / images.shape[0]) % (1 - 1e-5)
-            noise = torch.randn_like(actions)
-            noise_action = noise * t.view(-1, 1, 1) + actions * (1 - t).view(-1, 1, 1)
+            noise = torch.randn_like(action_seq)
+            noise_action = noise * t.view(-1, 1, 1) + action_seq * (1 - t).view(-1, 1, 1)
         # print('******', vision_embedding.shape, encoded_language.shape)
         # print(proprio.shape, noise_action.shape, t.shape)
 
@@ -86,11 +87,11 @@ class BaseModel(nn.Module):
         
         if self.model_type == 'flow-matching': 
             # print('output_action', output_action.shape, actions.shape)
-            return self.loss(output_action, noise - actions)
+            return self.loss(output_action, noise - action_seq)
         elif self.model_type == 'discrete':
-            return self.loss(output_action.view(-1, self.num_bins), actions.view(-1))
+            return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
         else:
-            return self.loss(output_action, actions)
+            return self.loss(output_action, action_seq)
         
         
     def pred_action(self,

@@ -16,5 +16,5 @@ torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --m
   --learning_rate 5e-4 \
   --precision bf16 \
   --port $port \
-  --output_dir runnings/RoboTwin/abs_ee \
-  --metas_path /home/fyc/EmpiricalStudyForVLA/datasets/meta_files/robotwin2_abs_ee.jsonl  
+  --output_dir runnings/RoboTwin/rel_ee \
+  --metas_path /home/fyc/EmpiricalStudyForVLA/datasets/meta_files/robotwin2_rel_ee.jsonl  
