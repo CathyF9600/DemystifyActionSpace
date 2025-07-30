@@ -23,10 +23,15 @@ from scipy.spatial.transform import Rotation as R
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 import cv2
+from io import BytesIO
 
 def decode_image_from_bytes(camera_rgb_image):
     # print('camera_rgb_image', type(camera_rgb_image))
     # camera_rgb_image = np.array(camera_rgb_image)
+    if isinstance(camera_rgb_image, Image.Image):
+        buffer = BytesIO()
+        camera_rgb_image.save(buffer, format="PNG")  # Or "JPEG"
+        camera_rgb_image = buffer.getvalue()
     if isinstance(camera_rgb_image, (bytes, bytearray)): camera_rgb_image = np.frombuffer(camera_rgb_image, dtype=np.uint8)
     rgb = cv2.imdecode(camera_rgb_image, cv2.IMREAD_COLOR)
     if rgb is None: 
