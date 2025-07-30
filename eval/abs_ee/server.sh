@@ -1,5 +1,5 @@
 #!/bin/bash
-port=8008
+port=8009
 export CUDA_VISIBLE_DEVICES=1 #4,5,6,7
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH

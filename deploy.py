@@ -77,26 +77,27 @@ class DeployModel:
             
             image_list = []        
             if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"])))
-            if "image1" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image1"])))
-            if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"])))
+            # if "image1" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image1"])))
+            # if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"])))
             language_inputs  = self.lang_encoder.forward([payload['language_instruction']])
             # image_inputs = self.image_processor(image_list)
-            image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img)) for img in image_list])
-
-            action = np.array(json_numpy.loads(payload['action']))
-            print('language_inputs',language_inputs)
-            print('image_inputs',image_inputs)
+            image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img)) for img in image_list]) # < ---- is this correct
+            print('payload.keys()', payload.keys())
+            action = np.array(json_numpy.loads(payload['proprio']))
+            print('language_inputs',payload['language_instruction'])
+            print('image_inputs',image_input)
             inputs = {
-                **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
+                # **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
                 # **{key: value.cuda(non_blocking=True) for key, value in image_inputs.items()},
-                'images': image_input,
+                'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
+                'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
                 'proprio':  torch.tensor(action).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
+                # 'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
                 'steps': self.denoising_steps
             }
             
             with torch.no_grad():
-                action = self.model.pred_action(**inputs).squeeze(0).cpu().numpy()
+                action = self.model.pred_action(**inputs)
             return JSONResponse(
                 {'action': action.tolist()})
         

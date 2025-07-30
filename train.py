@@ -202,11 +202,11 @@ if __name__ == '__main__':
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     import os
     rank = int(os.environ.get("RANK", 0))
-    print('rank', rank)
-    if rank == 0:
-        wandb.init(
-            project="EmpiricalStudyForVLA",
-            name="robotwin2_abs_qpos",
-            config=vars(args)
-        )
+    # print('rank', rank)
+    # if rank == 0:
+    #     wandb.init(
+    #         project="EmpiricalStudyForVLA",
+    #         name="robotwin2_abs_qpos",
+    #         config=vars(args)
+    #     )
     main(slurm_env_init(args))

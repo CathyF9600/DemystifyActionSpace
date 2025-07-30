@@ -207,10 +207,10 @@ class MlpDecoder(nn.Module):
                 noise_action = None, # B num_action_chunk dim_action
                 t = None # B
         ):
-        # print(f"visual_feature shape: {visual_feature.shape}")  # 例如 (B, V, N, num_features)
-        # print(f"language_feature shape: {language_feature.shape}")  # 例如 (B, C_lang)
-        # print(f"proprio shape: {proprio.shape}")  # 例如 (B, C_proprio)
-        # print(f"noise_action shape: {noise_action.shape}")  # 例如 (B, num_action, C_action)
+        print(f"visual_feature shape: {visual_feature.shape}")  # 例如 (B, V, N, num_features)
+        print(f"language_feature shape: {language_feature.shape}")  # 例如 (B, C_lang)
+        print(f"proprio shape: {proprio.shape}")  # 例如 (B, C_proprio)
+        print(f"noise_action shape: {noise_action.shape}")  # 例如 (B, num_action, C_action)
 
         batch_size = visual_feature.shape[0]
         visual_feature = torch.mean(visual_feature, dim=-2, keepdim=False)

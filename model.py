@@ -100,6 +100,7 @@ class BaseModel(nn.Module):
                 proprio: torch.Tensor,
                 steps = 5, # for flow-matching only
             ):
+        print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
