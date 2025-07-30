@@ -3,7 +3,7 @@ log/
 EmpiricalStudyForVLA.egg-info/
 *.txt
 runnings/
-*.jsonl
+
 
 */log/
 wandb/

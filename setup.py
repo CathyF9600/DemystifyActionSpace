@@ -76,7 +76,9 @@ setup(
         "urllib3",
         "wheel",
         "x-transformers",
-        "yapf"
+        "yapf",
+        "protobuf",
+        "sentencepiece"
     ],
     python_requires=">=3.10,<3.11",
 )
