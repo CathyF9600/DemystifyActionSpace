@@ -1,10 +1,11 @@
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=4,5
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 export HF_HUB_DISABLE_XET=True
+export WANDB_API_KEY=56c323ace61a5076f5d8e92a91237607bbc362a7
 
-port=13555
+port=13558
 source /home/anaconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
@@ -16,5 +17,6 @@ torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --m
   --learning_rate 5e-4 \
   --precision bf16 \
   --port $port \
-  --output_dir runnings/RoboTwin/abs_ee \
+  --output_dir runnings/RoboTwin/abs_ee_flow \
+  --wandb_name robotwin2_abs_ee_flow \
   --metas_path /home/fyc/EmpiricalStudyForVLA/datasets/meta_files/robotwin2_abs_ee.jsonl  
