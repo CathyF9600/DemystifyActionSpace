@@ -65,8 +65,7 @@ class DeployModel:
         
         # augmentations
         self.image_aug = transforms.Compose([
-            transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
-            transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.3, hue=0.),
+            transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
@@ -77,15 +76,18 @@ class DeployModel:
             
             image_list = []        
             if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"])))
-            # if "image1" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image1"])))
-            # if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"])))
+            if "image1" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image1"])))
+            if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"])))
             language_inputs  = self.lang_encoder.forward([payload['language_instruction']])
             # image_inputs = self.image_processor(image_list)
-            image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img)) for img in image_list]) # < ---- is this correct
-            print('payload.keys()', payload.keys())
+            image_input =  torch.stack([self.image_aug(img) for img in image_list]) # < ---- is this correct
+            # print('payload.keys()', payload.keys())
             action = np.array(json_numpy.loads(payload['proprio']))
-            print('language_inputs',payload['language_instruction'])
-            print('image_inputs',image_input)
+            # save lang
+            print('current action', action)
+
+            # print('language_inputs', payload['language_instruction'])
+            # print('image_inputs', image_input)
             inputs = {
                 # **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
                 # **{key: value.cuda(non_blocking=True) for key, value in image_inputs.items()},

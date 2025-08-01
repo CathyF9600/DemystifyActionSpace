@@ -18,7 +18,6 @@ class language_encoder(nn.Module):
         inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")        
         # 2. 将输入张量移动到模型所在的设备（关键修复）
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
         return self.model(**inputs).pooler_output
 
 class BaseModel(nn.Module):
@@ -87,7 +86,7 @@ class BaseModel(nn.Module):
         
         if self.model_type == 'flow-matching': 
             # print('output_action', output_action.shape, actions.shape)
-            return self.loss(output_action, noise - action_seq)
+            return self.loss(output_action, action_seq)
         elif self.model_type == 'discrete':
             return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
         else:
@@ -119,7 +118,8 @@ class BaseModel(nn.Module):
                             proprio = proprio,
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
-                action_with_noise = action_with_noise - pred_action / time.view(B, 1, 1) / steps
+                action_with_noise = action_with_noise - (action_with_noise - pred_action) / time.view(B, 1, 1) / steps
+            return action_with_noise
         elif self.model_type == 'discrete': # Auto-regressive model
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
