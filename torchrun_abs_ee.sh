@@ -5,8 +5,10 @@ export HF_ENDPOINT=https://hf-mirror.com
 export HF_HUB_DISABLE_XET=True
 export WANDB_API_KEY=56c323ace61a5076f5d8e92a91237607bbc362a7
 
-port=13558
-source /home/anaconda3/etc/profile.d/conda.sh
+port=13555
+# source /home/anaconda3/etc/profile.d/conda.sh
+source /home/dodo/miniconda3/etc/profile.d/conda.sh
+
 conda deactivate
 conda activate em
 # pip install fastapi

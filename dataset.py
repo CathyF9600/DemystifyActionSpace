@@ -140,7 +140,7 @@ class InfiniteDataReader(IterableDataset):
                 action_seq = action_seq[1:]
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
 
-            elif dataset_name == 'robotwin2_abs_qpos':
+            elif dataset_name == 'robotwin2_abs_qpos': # 14
                 freq = self.num_actions  # adjust if needed
                 left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)

@@ -65,8 +65,7 @@ class DeployModel:
         
         # augmentations
         self.image_aug = transforms.Compose([
-            transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
-            transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.3, hue=0.),
+            transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
@@ -81,25 +80,33 @@ class DeployModel:
             if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"])))
             language_inputs  = self.lang_encoder.forward([payload['language_instruction']])
             # image_inputs = self.image_processor(image_list)
-            image_input =  torch.stack([self.image_aug(img) for img in image_list])
-
+            image_input =  torch.stack([self.image_aug(img) for img in image_list]) # < ---- is this correct
+            # print('payload.keys()', payload.keys())
             proprio = np.array(json_numpy.loads(payload['proprio']))
-            print('language_inputs',language_inputs)
-            print('image_inputs',image_inputs)
+            # save lang
+            # print('current action', action)
+
+            # print('language_inputs', payload['language_instruction'])
+            # print('image_inputs', image_input)
             inputs = {
-                **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
+                # **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
                 # **{key: value.cuda(non_blocking=True) for key, value in image_inputs.items()},
-                'images': image_input,
+                'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
+                'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
                 'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
+                # 'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
                 'steps': self.denoising_steps
             }
             
             with torch.no_grad():
-                action = self.model.pred_action(**inputs).squeeze(0).cpu().numpy()
-                if "data_type" in payload.keys():
-                    if payload["data_type"] == "rel":
-                        action_final = action.cumsum(axis = 1) + proprio
+                action = self.model.pred_action(**inputs)
+                print(action)
+                if 'data_type' in payload.keys():
+                    if payload['data_type'] == 'rel':
+                        print('action', action.shape)
+                        print('proprio', proprio.shape)
+                        action_sum = action.cumsum(axis=1) + proprio
+                        print('action_sum', action_sum)
             return JSONResponse(
                 {'action': action.tolist()})
         
@@ -127,7 +134,7 @@ def main():
     parser.add_argument('--vision_backbone', default="resnet18.a1_in1k", type=str, help="Vision backbone name (from timm)")
     parser.add_argument('--decoder_name', default="mlp_decoder_base", type=str, help="Decoder name")
     parser.add_argument('--model_type', type=str, default="continuous", choices=["continuous", "discrete", "flow-matching"], help="Model type")
-    parser.add_argument('--num_actions', type=int, default=10, help="Number of action chunks")
+    parser.add_argument('--num_actions', type=int, default=30, help="Number of action chunks")
     parser.add_argument('--learning_coef', default=1., type=float)
     parser.add_argument('--weight_decay', default=0.01, type=float)
 

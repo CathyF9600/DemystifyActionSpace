@@ -40,6 +40,7 @@ class BaseModel(nn.Module):
         assert model_type in ['continuous', 'discrete', 'flow-matching']
         self.vision_backbone = create_model(vision_backbone, pretrained=True)
         del self.vision_backbone.fc
+        print('making decoder:', dim_proprio)
         self.decoder = create_model(decoder_name,
                                     model_type = model_type,
                                     dim_visual = self.vision_backbone.num_features,
@@ -60,6 +61,7 @@ class BaseModel(nn.Module):
                 action_seq: torch.Tensor):
         # print('action_seq', action_seq.shape)
         # actions = action_seq[:, 1:] # 0~19: abs future eef
+        
         # proprio = proprio + torch.randn_like(proprio) * 0.01 # augmentation
         
         B, V, C, H, W = images.shape
@@ -74,7 +76,7 @@ class BaseModel(nn.Module):
             noise = torch.randn_like(action_seq)
             noise_action = noise * t.view(-1, 1, 1) + action_seq * (1 - t).view(-1, 1, 1)
         # print('******', vision_embedding.shape, encoded_language.shape)
-        # print(proprio.shape, noise_action.shape, t.shape)
+        print(proprio.shape, noise_action.shape, t.shape)
 
         output_action = self.decoder(
             visual_feature = vision_embedding,
