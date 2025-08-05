@@ -120,7 +120,7 @@ def get_args_parser():
     parser.add_argument('--vision_backbone', default="resnet18.a1_in1k", type=str, help="Vision backbone name (from timm)")
     parser.add_argument('--decoder_name', default="mlp_decoder_base", type=str, help="Decoder name")
     parser.add_argument('--model_type', type=str, default="continuous", choices=["continuous", "discrete", "flow-matching"], help="Model type")
-    parser.add_argument('--num_actions', type=int, default=10, help="Number of action chunks")
+    parser.add_argument('--num_actions', type=int, default=30, help="Number of action chunks")
     parser.add_argument('--learning_coef', default=1., type=float)
     parser.add_argument('--weight_decay', default=0.01, type=float)
     

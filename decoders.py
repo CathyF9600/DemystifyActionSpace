@@ -88,7 +88,7 @@ class TransfomerEncoderBlock(nn.Module):
 class TransformerDecoder(nn.Module):
     def __init__(self, 
                  model_type,
-                 encoder_depth = 3,
+                 encoder_depth = 6,
                  decoder_depth = 3,
                  hidden_size = 512,
                  num_heads = 8,
@@ -236,6 +236,28 @@ def mlp_decoder_base(model_type,
     return MlpDecoder(
                 model_type = model_type,
                 depth = 2,
+                hidden_size = 512,
+                mlp_ratio = 4.0,
+                dim_visual = dim_visual,
+                dim_language = dim_language,
+                num_views = 3,
+                dim_proprio = dim_proprio,
+                dim_actions = dim_actions,
+                num_action_chunk = num_action_chunk,
+                num_bins = num_bins
+            )
+
+def mlp_decoder_large(model_type, 
+                     dim_visual,
+                     dim_language,
+                     dim_proprio,
+                     dim_actions, 
+                     num_action_chunk,
+                     num_bins,
+                     **kwarges):
+    return MlpDecoder(
+                model_type = model_type,
+                depth = 6,
                 hidden_size = 512,
                 mlp_ratio = 4.0,
                 dim_visual = dim_visual,

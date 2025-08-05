@@ -12,6 +12,7 @@ conda activate em
 # pip install fastapi
 torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --master-port=$port train.py \
   --model_type flow-matching \
+  --decoder_name mlp_decoder_large \
   --batch-size 32 \
   --dim_actions 20 \
   --learning_rate 5e-4 \
