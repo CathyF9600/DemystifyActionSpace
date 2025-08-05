@@ -126,8 +126,8 @@ class InfiniteDataReader(IterableDataset):
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
                 right_grip = data["endpose/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
+                # left_grip = 1 - left_grip * 2
+                # right_grip = 1 - right_grip * 2
                 action_seq = np.concatenate([
                     left_ee[:, :3],
                     quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
@@ -146,8 +146,8 @@ class InfiniteDataReader(IterableDataset):
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
                 left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
                 right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
+                # left_grip = 1 - left_grip * 2
+                # right_grip = 1 - right_grip * 2
                 action_seq = np.concatenate([
                     left_joint,                        # (T,7)
                     left_grip[:, None],             # (T,1)
@@ -218,12 +218,13 @@ class InfiniteDataReader(IterableDataset):
             with open(json_p, "r") as f:
                 self.language_aug = json.load(f)
             for idx in index_list:
-                ins = random.choice(self.language_aug["seen"])
+                ins = ins = datapath.split('/')[-4].replace('_', ' ') #random.choice(self.language_aug["seen"])
+                print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
                 action = action_seq[idx:min(idx+freq, action_seq.shape[0])]
-                if dataset_name == 'robotwin2_abs_ee' or dataset_name == 'robotwin2_abs_qpos':
-                    action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
+                # if dataset_name == 'robotwin2_abs_ee' or dataset_name == 'robotwin2_abs_qpos':
+                #     action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
                 # images: torch.Tensor, # B V C H W
                 # encoded_language: torch.Tensor, # B C
                 # proprio: torch.Tensor,

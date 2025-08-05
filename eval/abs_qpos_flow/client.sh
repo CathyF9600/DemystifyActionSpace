@@ -1,5 +1,5 @@
 #!/bin/bash
-port=8019
+port=8011
 export CUDA_VISIBLE_DEVICES=1
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH
@@ -21,7 +21,7 @@ python script/robotwin_client_em_abs_ee.py \
     --num_episodes 10 \
     --device 0 \
     --seed 3 \
-    --task_name all \
+    --task_name adjust_bottle \
     --output_path $eval_log_dir \
     --task_config demo_randomized \
     --instruction_type seen #> $eval_log_dir/log.txt 2>&1
