@@ -92,7 +92,7 @@ class InfiniteDataReader(IterableDataset):
                 print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
                 random.shuffle(meta['datalist'])
                 self.metas[meta['dataset_name']] = meta
-                
+
         # augmentations
         self.image_aug = transforms.Compose([
             transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
@@ -109,8 +109,8 @@ class InfiniteDataReader(IterableDataset):
         stats = np.load(stats_file)
         self.global_mean = np.asarray(stats["mean"])
         self.global_std = np.asarray(stats["std"])
-        print('self.global_mean', self.global_mean)
-        print('self.global_std', self.global_std)
+        # print('self.global_mean', self.global_mean)
+        # print('self.global_std', self.global_std)
         # import pdb; pdb.set_trace()
 
     def read_hdf5(self, dataset_name, idx):

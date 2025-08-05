@@ -250,6 +250,28 @@ def mlp_decoder_base(model_type,
                 num_bins = num_bins
             )
 
+def mlp_decoder_large(model_type, 
+                     dim_visual,
+                     dim_language,
+                     dim_proprio,
+                     dim_actions, 
+                     num_action_chunk,
+                     num_bins,
+                     **kwarges):
+    return MlpDecoder(
+                model_type = model_type,
+                depth = 6,
+                hidden_size = 512,
+                mlp_ratio = 4.0,
+                dim_visual = dim_visual,
+                dim_language = dim_language,
+                num_views = 3,
+                dim_proprio = dim_proprio,
+                dim_actions = dim_actions,
+                num_action_chunk = num_action_chunk,
+                num_bins = num_bins
+            )
+
 @register_model
 def mlp_decoder_large(model_type, 
                      dim_visual,

@@ -121,7 +121,7 @@ class BaseModel(nn.Module):
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
                 action_with_noise = action_with_noise - (action_with_noise - pred_action) / time.view(B, 1, 1) / steps
-            return action_with_noise
+            return action_with_noise # denoised action
         elif self.model_type == 'discrete': # Auto-regressive model
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
