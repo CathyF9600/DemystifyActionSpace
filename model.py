@@ -76,7 +76,7 @@ class BaseModel(nn.Module):
             noise = torch.randn_like(action_seq)
             noise_action = noise * t.view(-1, 1, 1) + action_seq * (1 - t).view(-1, 1, 1)
         # print('******', vision_embedding.shape, encoded_language.shape)
-        print(proprio.shape, noise_action.shape, t.shape)
+            # print(proprio.shape, noise_action.shape, t.shape)
 
         output_action = self.decoder(
             visual_feature = vision_embedding,
