@@ -1,5 +1,5 @@
 #!/bin/bash
-port=8019
+port=8011
 export CUDA_VISIBLE_DEVICES=1 #4,5,6,7
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH
@@ -24,12 +24,14 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 
 
-ckpt_path=/data/empirical/abs_qpos_flow/ckpt-final
+# ckpt_path=/data/empirical/abs_qpos_flow/ckpt-final
+ckpt_path=/data/empirical/abs_qpos_flow/mlp6/ckpt-220000
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
 python /home/dodo/fyc/EmpiricalStudyForVLA/deploy.py \
     --ckpt_path $ckpt_path \
+    --decoder_name mlp_decoder_large \
     --dim_actions 14 \
     --dim_proprio 14 \
     --num_actions 30 \
