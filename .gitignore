@@ -8,3 +8,4 @@ runnings/
 */log/
 wandb/
 *.log
+*.ipynb

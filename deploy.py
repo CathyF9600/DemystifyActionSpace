@@ -82,9 +82,9 @@ class DeployModel:
             # image_inputs = self.image_processor(image_list)
             image_input =  torch.stack([self.image_aug(img) for img in image_list]) # < ---- is this correct
             # print('payload.keys()', payload.keys())
-            action = np.array(json_numpy.loads(payload['proprio']))
+            proprio = np.array(json_numpy.loads(payload['proprio']))
             # save lang
-            print('current action', action)
+            # print('current action', action)
 
             # print('language_inputs', payload['language_instruction'])
             # print('image_inputs', image_input)
@@ -93,13 +93,20 @@ class DeployModel:
                 # **{key: value.cuda(non_blocking=True) for key, value in image_inputs.items()},
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                'proprio':  torch.tensor(action).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
                 # 'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
                 'steps': self.denoising_steps
             }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
+                print(action)
+                if 'data_type' in payload.keys():
+                    if payload['data_type'] == 'rel':
+                        print('action', action.shape)
+                        print('proprio', proprio.shape)
+                        action_sum = action.cumsum(axis=1) + proprio
+                        print('action_sum', action_sum)
             return JSONResponse(
                 {'action': action.tolist()})
         
@@ -127,7 +134,7 @@ def main():
     parser.add_argument('--vision_backbone', default="resnet18.a1_in1k", type=str, help="Vision backbone name (from timm)")
     parser.add_argument('--decoder_name', default="mlp_decoder_base", type=str, help="Decoder name")
     parser.add_argument('--model_type', type=str, default="continuous", choices=["continuous", "discrete", "flow-matching"], help="Model type")
-    parser.add_argument('--num_actions', type=int, default=10, help="Number of action chunks")
+    parser.add_argument('--num_actions', type=int, default=30, help="Number of action chunks")
     parser.add_argument('--learning_coef', default=1., type=float)
     parser.add_argument('--weight_decay', default=0.01, type=float)
 

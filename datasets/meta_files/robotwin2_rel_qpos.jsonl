@@ -1,11 +1,12 @@
 {
-  "dataset_name": "robotwin2_abs_ee",
-  "domain_id": 9,
+  "dataset_name": "robotwin2_rel_qpos",
+  "domain_id": 6,
   "action_key": [
-    "endpose/left_endpose",
-    "endpose/right_endpose",
-    "endpose/left_gripper",
-    "endpose/right_gripper"
+    "joint_action/left_arm",
+    "joint_action/right_arm",
+    "joint_action/left_gripper",
+    "joint_action/right_gripper"
+    
   ],
   "language_instruction_key": "task_name",
   "observation_key": [

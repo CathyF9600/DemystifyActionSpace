@@ -10,16 +10,18 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/eval/abs_ee/log
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/eval/abs_qpos_flow/log
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_em_abs_ee.py \
+    --data_type abs \
+    --action_type qpos \
     --host 0.0.0.0 \
     --port $port \
     --eval_log_dir $eval_log_dir \
     --num_episodes 10 \
     --device 0 \
     --seed 3 \
-    --task_name lift_pot \
+    --task_name all \
     --output_path $eval_log_dir \
     --task_config demo_randomized \
     --instruction_type seen #> $eval_log_dir/log.txt 2>&1

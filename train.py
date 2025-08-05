@@ -16,6 +16,96 @@ from timm import create_model
 from safetensors.torch import load_file
 from accelerate.utils import DistributedDataParallelKwargs
 import wandb
+import glob
+from mmengine import fileio
+import io
+import h5py
+import json
+from scipy.spatial.transform import Rotation as R
+
+def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
+    return R.from_quat(q).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
+
+# def cal_delta_rotate(q1, q2):
+#     q1 = R.from_quat(q1)
+#     q2 = R.from_quat(q2)
+#     del_rotate = q1 * q2.inv()
+#     return del_rotate.as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
+
+def cal_delta_rotate(q1, q2):
+    q1 = R.from_quat(q1)
+    q2 = R.from_quat(q2)
+    del_rotate = q1 * q2.inv()
+    return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
+
+def compute_mean_std(hdf5_paths, control='ee'):
+    all_data = []
+    for path in hdf5_paths:
+        with h5py.File(path, 'r') as data:
+            if control == 'qpos':
+                left_joint = data["joint_action/left_arm"][()]      # (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]   # (T,)
+                right_grip = data["joint_action/right_gripper"][()] # (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+
+                # Relative joint positions and next-step gripper values
+                joint_diff = np.concatenate([
+                    left_joint[1:] - left_joint[:-1],
+                    left_grip[1:, None],  # use future value directly
+                    right_joint[1:] - right_joint[:-1],
+                    right_grip[1:, None]
+                ], axis=-1)
+                action_seq = joint_diff
+
+            else:
+                # End-effector control
+                left_pos = data["endpose/left_endpose"][()]       # (T, 7)
+                right_pos = data["endpose/right_endpose"][()]     # (T, 7)
+                left_grip = data["endpose/left_gripper"][()]      # (T,)
+                right_grip = data["endpose/right_gripper"][()]    # (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+
+                left_delta_xyz = left_pos[1:, :3] - left_pos[:-1, :3]
+                right_delta_xyz = right_pos[1:, :3] - right_pos[:-1, :3]
+
+                left_delta_rot6d = cal_delta_rotate(left_pos[1:, 3:], left_pos[:-1, 3:])
+                right_delta_rot6d = cal_delta_rotate(right_pos[1:, 3:], right_pos[:-1, 3:])
+
+                action_seq = np.concatenate([
+                    left_delta_xyz,
+                    left_delta_rot6d,
+                    left_grip[1:, None],   # future gripper value
+                    right_delta_xyz,
+                    right_delta_rot6d,
+                    right_grip[1:, None]
+                ], axis=-1)
+
+            # print('action_seq.shape', action_seq.shape)
+            all_data.append(action_seq)
+
+    stacked = np.concatenate(all_data, axis=0)  # (N, action_dim)
+    mean = stacked.mean(axis=0)
+    std = stacked.std(axis=0)
+    print('mean:', mean)
+    print('std:', std)
+    return mean, std
+
+def get_hdf5s(metas_path):
+    metas = {}
+
+    # reading setting
+    if fileio.isdir(metas_path): meta_files = fileio.list_dir_or_file(metas_path, suffix='.json', recursive=True, list_dir=False)
+    else: meta_files, metas_path = [metas_path], ""
+    for file in meta_files:
+        with io.BytesIO(fileio.get(fileio.join_path(metas_path, file))) as f:
+            meta = json.load(f)
+            print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
+            random.shuffle(meta['datalist'])
+            metas[meta['dataset_name']] = meta
+    return meta['datalist']
 
 def get_args_parser():
     parser = argparse.ArgumentParser('Training script', add_help=False)
@@ -40,6 +130,7 @@ def get_args_parser():
     parser.add_argument('--save_interval', default=20000, type=int)
     parser.add_argument('--log_interval', default=10, type=int)
     parser.add_argument('--dim_actions', default=20, type=int)
+    parser.add_argument('--wandb_name', default='robotwin2_abs_qpos', type=str)
     parser.add_argument('--dim_proprio', default=20, type=int)
 
     parser.add_argument('--output_dir', default='runnings/',
@@ -87,6 +178,22 @@ def main(args):
     
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1000 / 1000
     accelerator.print(f'number of params: {n_parameters} M')
+    rank = int(os.environ.get("RANK", 0))
+    print('**** rank:', rank)
+
+    if True: #rank == 0 and 'rel' in args.wandb_name:
+        hdf5_files = get_hdf5s(args.metas_path)
+        print('len(hdf5_files)', len(hdf5_files))
+        # paths = glob.glob(hdf5_files)
+        control = None
+        if 'rel_ee' in args.wandb_name:
+            control = 'ee'
+        else:
+            control = 'qpos'
+        mean, std = compute_mean_std(hdf5_files, control=control)
+        stats_file = args.metas_path.replace(".jsonl", "_global_stats.npz")
+        print('Saving stats_file', args.metas_path, stats_file)
+        np.savez(stats_file, mean=mean, std=std)
 
     train_dataloader = create_dataloader(
         rank=accelerator.process_index,
@@ -202,11 +309,11 @@ if __name__ == '__main__':
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
     import os
     rank = int(os.environ.get("RANK", 0))
-    # print('rank', rank)
-    # if rank == 0:
-    #     wandb.init(
-    #         project="EmpiricalStudyForVLA",
-    #         name="robotwin2_abs_qpos",
-    #         config=vars(args)
-    #     )
+    print('rank', rank)
+    if rank == 0:
+        wandb.init(
+            project="EmpiricalStudyForVLA",
+            name=args.wandb_name,
+            config=vars(args)
+        )
     main(slurm_env_init(args))

@@ -47,7 +47,7 @@ def cal_delta_rotate(q1, q2):
     q1 = R.from_quat(q1)
     q2 = R.from_quat(q2)
     del_rotate = q1 * q2.inv()
-    return del_rotate.as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
+    return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
 
 def convert_hdf5_to_json(hdf5_path): # for RoboTwin
     # 替换基础目录
@@ -103,63 +103,24 @@ class InfiniteDataReader(IterableDataset):
         # with open("/mnt/petrelfs/zhengjinliang/HeteroDiffusionPolicy/HeteroFlowPolicy/datasets/utils/new_playtable.json", "r") as f:
         #     self.language_aug = json.load(f)
         self.language_aug = None
+        # print('metas_path', fileio.join_path(metas_path, file))
+        stats_file = fileio.join_path(metas_path, file).replace(".jsonl", "_global_stats.npz")
+        print('Loading relative mean and std from', stats_file)
+        stats = np.load(stats_file)
+        self.global_mean = np.asarray(stats["mean"])
+        self.global_std = np.asarray(stats["std"])
+        print('self.global_mean', self.global_mean)
+        print('self.global_std', self.global_std)
+        # import pdb; pdb.set_trace()
 
     def read_hdf5(self, dataset_name, idx):
         meta = self.metas[dataset_name]
         datapath = meta['datalist'][idx]
         if not isinstance(datapath, str): datapath = datapath[0]
-        
-        # with io.BytesIO(fileio.get(datapath)) as f:
-        #     data = h5py.File(f,'r')
+ 
         with h5py.File(datapath, "r") as data:
-            ### process actions for robomind (defaultly downsample with a rate of 3)
             images = [data[key] for key in meta['observation_key']] 
-            # ins = data[meta["language_instruction_key"]][()].decode() if len(data[meta["language_instruction_key"]].shape) == 0 else \
-            #         data[meta["language_instruction_key"]][0].decode()
-            
             if dataset_name == 'robotwin2_abs_ee':
-                freq = 30  # adjust if needed
-                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
-                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
-                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
-                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
-                action_seq = np.concatenate([
-                    left_ee[:, :3],
-                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_ee[:, :3],
-                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
-                    right_grip[:, None]             # (T,1)
-                ], axis=-1)
-                prorpio_seq = action_seq
-                action_seq = action_seq[1:]
-                # Create zero padding same shape as abs_eef for compatibility
-                # abs_eef = np.concatenate([abs_eef], axis=-1)  # now (T, 32)
-                # print("abs_eef", abs_eef)
-                # import pdb; pdb.set_trace()
-                index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
-
-            elif dataset_name == 'robotwin2_abs_qpos':
-                freq = 30  # adjust if needed
-                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
-                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
-                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
-                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
-                action_seq = np.concatenate([
-                    left_joint,                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_joint,                    # (T,7)
-                    right_grip[:, None]             # (T,1)
-                ], axis=-1)
-                prorpio_seq = action_seq
-                action_seq = action_seq[1:]
-                # print('********* action_seq.shape *********', action_seq.shape, left_joint.shape, left_grip.shape)
-                index_list = list(range(0, action_seq.shape[0] - 15))  # or adjust your window length as needed
-            elif dataset_name == 'robotwin2_rel_ee':
                 freq = self.num_actions  # adjust if needed
                 left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
@@ -175,10 +136,80 @@ class InfiniteDataReader(IterableDataset):
                     quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                # Compute relative action sequence: rel_t = action_{t+1} - action_t
                 prorpio_seq = action_seq
-                action_seq = action_seq[1:] - action_seq[:-1]  # shape (T-1, 20)
-                index_list = list(range(0, action_seq.shape[0] - self.num_actions))
+                action_seq = action_seq[1:]
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+
+            elif dataset_name == 'robotwin2_abs_qpos': # 14
+                freq = self.num_actions  # adjust if needed
+                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
+                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+                action_seq = np.concatenate([
+                    left_joint,                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_joint,                    # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                prorpio_seq = action_seq
+                action_seq = action_seq[1:]
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+            elif dataset_name == 'robotwin2_rel_ee':
+                freq = self.num_actions  # adjust if needed
+                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
+                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
+                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
+                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+                prorpio_seq = np.concatenate([
+                    left_ee[:, :3],
+                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_ee[:, :3],
+                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+
+                left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
+                right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
+                left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
+                right_delta_rot6d = cal_delta_rotate(right_ee[1:, 3:], right_ee[:-1, 3:])
+                ee_diff = np.concatenate([
+                    left_delta_xyz,
+                    left_delta_rot6d,
+                    left_grip[1:, None],   # future gripper value
+                    right_delta_xyz,
+                    right_delta_rot6d,
+                    right_grip[1:, None]
+                ], axis=-1)
+                action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                index_list = list(range(0, action_seq.shape[0] - freq))
+            elif dataset_name == 'robotwin2_rel_qpos':
+                freq = self.num_actions  # adjust if needed
+                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
+                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
+                prorpio_seq = np.concatenate([
+                    left_joint,                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_joint,                    # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                joint_diff = np.concatenate([
+                    left_joint[1:] - left_joint[:-1],
+                    left_grip[1:, None],  # use future value directly
+                    right_joint[1:] - right_joint[:-1],
+                    right_grip[1:, None]
+                ], axis=-1)
+                action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
             else: raise NotImplementedError
             
             random.shuffle(index_list)
@@ -220,7 +251,7 @@ class InfiniteDataReader(IterableDataset):
         dataset_names = list(self.metas.keys())
         idx = [int(self.rank % len(self.metas[dataset_name]['datalist'])) for dataset_name in dataset_names]
         generators = [self.get_generator(dataset_name, i) 
-                      for dataset_name, i in zip(dataset_names, idx) ]
+                      for dataset_name, i in zip(dataset_names, idx)]
         while True:
             for i in range(len(generators)):
                 def get_next_item():
