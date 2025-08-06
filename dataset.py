@@ -95,7 +95,7 @@ class InfiniteDataReader(IterableDataset):
 
         # augmentations
         self.image_aug = transforms.Compose([
-            transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
+            transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
             transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.3, hue=0.),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)

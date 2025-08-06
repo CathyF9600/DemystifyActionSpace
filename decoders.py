@@ -141,9 +141,11 @@ class TransformerDecoder(nn.Module):
         visual_feature = self.visual_proj(visual_feature.reshape(batch_size, -1, self.dim_visual))
         language_feature = self.language_proj(language_feature).unsqueeze(1)
         proprio = self.proprio_proj(proprio).unsqueeze(1)
-        c = torch.cat([visual_feature, language_feature, proprio], dim = 1)
+        c = torch.cat([visual_feature, proprio], dim = 1)
         for block in self.encoder: c = block(c)
         x = self.queries.repeat(batch_size, 1, 1)
+        x = x + language_feature
+        t = self.time_encoder(t)
         if self.model_type == 'flow-matching': 
             t = self.time_encoder(t)
             x = x + self.action_in_proj(noise_action)
@@ -211,8 +213,8 @@ class MlpDecoder(nn.Module):
         # print(f"visual_feature shape: {visual_feature.shape}")  # 例如 (B, V, N, num_features)
         # print(f"language_feature shape: {language_feature.shape}")  # 例如 (B, C_lang)
         # print(f"proprio shape: {proprio.shape}")  # 例如 (B, C_proprio)
-        # if self.model_type == 'flow-matching':
-        #     print(f"noise_action shape: {noise_action.shape}")  # 例如 (B, num_action, C_action)
+        if self.model_type == 'flow-matching':
+            print(f"noise_action shape: {noise_action.shape}")  # 例如 (B, num_action, C_action)
 
         batch_size = visual_feature.shape[0]
         visual_feature = torch.mean(visual_feature, dim=-2, keepdim=False)
@@ -222,6 +224,7 @@ class MlpDecoder(nn.Module):
         if self.model_type == 'flow-matching': 
             # print('x.shape', x.shape)
             x = torch.cat([x, noise_action.view(batch_size, -1), self.time_encoder(t)], dim =-1)
+        # print('x.shape', x.shape)
         x = self.in_proj(x)
         for block, ln in zip(self.blocks, self.ln):x = x + block(ln(x))
         return self.out_proj(x).view(batch_size, self.num_action_chunk, -1)
