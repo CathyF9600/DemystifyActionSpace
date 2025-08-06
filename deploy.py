@@ -84,7 +84,8 @@ class DeployModel:
             # print('payload.keys()', payload.keys())
             proprio = np.array(json_numpy.loads(payload['proprio']))
             # save lang
-            # print('current action', action)
+            print("language:", payload['language_instruction'])
+            print('current proprio', proprio)
 
             # print('language_inputs', payload['language_instruction'])
             # print('image_inputs', image_input)
