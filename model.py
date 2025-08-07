@@ -18,7 +18,6 @@ class language_encoder(nn.Module):
         inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")        
         # 2. 将输入张量移动到模型所在的设备（关键修复）
         inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        
         return self.model(**inputs).pooler_output
 
 class BaseModel(nn.Module):
@@ -41,6 +40,7 @@ class BaseModel(nn.Module):
         assert model_type in ['continuous', 'discrete', 'flow-matching']
         self.vision_backbone = create_model(vision_backbone, pretrained=True)
         del self.vision_backbone.fc
+        print('making decoder:', dim_proprio)
         self.decoder = create_model(decoder_name,
                                     model_type = model_type,
                                     dim_visual = self.vision_backbone.num_features,
@@ -57,10 +57,12 @@ class BaseModel(nn.Module):
     def forward(self,
                 images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
+                proprio: torch.Tensor, # B C
                 action_seq: torch.Tensor):
         # print('action_seq', action_seq.shape)
-        actions = action_seq[:, 1:] # 0~19: abs future eef
-        proprio = action_seq[:, 0] + torch.randn_like(action_seq[:, 0]) * 0.05 # augmentation
+        # actions = action_seq[:, 1:] # 0~19: abs future eef
+        
+        # proprio = proprio + torch.randn_like(proprio) * 0.01 # augmentation
         
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
@@ -71,10 +73,10 @@ class BaseModel(nn.Module):
         t = None
         if self.model_type == 'flow-matching':
             t = (torch.rand(1, device=images.device) + torch.arange(images.shape[0], device=images.device) / images.shape[0]) % (1 - 1e-5)
-            noise = torch.randn_like(actions)
-            noise_action = noise * t.view(-1, 1, 1) + actions * (1 - t).view(-1, 1, 1)
+            noise = torch.randn_like(action_seq)
+            noise_action = noise * t.view(-1, 1, 1) + action_seq * (1 - t).view(-1, 1, 1)
         # print('******', vision_embedding.shape, encoded_language.shape)
-        # print(proprio.shape, noise_action.shape, t.shape)
+            # print(proprio.shape, noise_action.shape, t.shape)
 
         output_action = self.decoder(
             visual_feature = vision_embedding,
@@ -86,11 +88,11 @@ class BaseModel(nn.Module):
         
         if self.model_type == 'flow-matching': 
             # print('output_action', output_action.shape, actions.shape)
-            return self.loss(output_action, noise - actions)
+            return self.loss(output_action, action_seq)
         elif self.model_type == 'discrete':
-            return self.loss(output_action.view(-1, self.num_bins), actions.view(-1))
+            return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
         else:
-            return self.loss(output_action, actions)
+            return self.loss(output_action, action_seq)
         
         
     def pred_action(self,
@@ -99,6 +101,7 @@ class BaseModel(nn.Module):
                 proprio: torch.Tensor,
                 steps = 5, # for flow-matching only
             ):
+        print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -117,7 +120,8 @@ class BaseModel(nn.Module):
                             proprio = proprio,
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
-                action_with_noise = action_with_noise - pred_action / time.view(B, 1, 1) / steps
+                action_with_noise = action_with_noise - (action_with_noise - pred_action) / time.view(B, 1, 1) / steps
+            return action_with_noise # denoised action
         elif self.model_type == 'discrete': # Auto-regressive model
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,

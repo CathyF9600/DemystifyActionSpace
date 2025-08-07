@@ -69,7 +69,7 @@ class TransfomerDecoderBlock(nn.Module):
     def forward(self, x, c):
         x = x + self.attn(self.norm1(x))
         x = x + self.cross_attn(self.norm2(x), c, c)[0]
-        x = x + self.mlp(self.norm2(x))
+        x = x + self.mlp(self.norm3(x))
         return x
 
 class TransfomerEncoderBlock(nn.Module):
@@ -88,7 +88,7 @@ class TransfomerEncoderBlock(nn.Module):
 class TransformerDecoder(nn.Module):
     def __init__(self, 
                  model_type,
-                 encoder_depth = 3,
+                 encoder_depth = 6,
                  decoder_depth = 3,
                  hidden_size = 512,
                  num_heads = 8,
@@ -137,14 +137,16 @@ class TransformerDecoder(nn.Module):
                 t = None # B
             ):
         batch_size = visual_feature.shape[0]
-        visual_feature = self.visual_proj(visual_feature.view(batch_size, -1, self.dim_visual))
+        # visual_feature = self.visual_proj(visual_feature.view(batch_size, -1, self.dim_visual))
+        visual_feature = self.visual_proj(visual_feature.reshape(batch_size, -1, self.dim_visual))
         language_feature = self.language_proj(language_feature).unsqueeze(1)
         proprio = self.proprio_proj(proprio).unsqueeze(1)
-        c = torch.cat([visual_feature, language_feature, proprio], dim = 1)
+        c = torch.cat([visual_feature, proprio], dim = 1)
         for block in self.encoder: c = block(c)
         x = self.queries.repeat(batch_size, 1, 1)
-        t = self.time_encoder(t)
+        x = x + language_feature
         if self.model_type == 'flow-matching': 
+            t = self.time_encoder(t)
             x = x + self.action_in_proj(noise_action)
             for block in self.decoder: x = block(x, c, t)
         else:
@@ -174,6 +176,13 @@ class MlpDecoder(nn.Module):
             self.in_proj = nn.Linear(dim_visual * num_views + dim_language + dim_proprio \
                                     + dim_actions * num_action_chunk + hidden_size // 4,
                                     hidden_size)
+            # print('dim_visual', dim_visual)
+            # print('num_views', num_views)
+            # print('dim_language', dim_language)
+            # print('dim_proprio', dim_proprio)
+            # print('dim_actions', dim_actions)
+            # print('num_action_chunk', num_action_chunk)
+            # print('hidden_size', hidden_size)
         else:
             self.in_proj = nn.Linear(dim_visual * num_views + dim_language + dim_proprio,
                                     hidden_size)
@@ -201,13 +210,21 @@ class MlpDecoder(nn.Module):
                 noise_action = None, # B num_action_chunk dim_action
                 t = None # B
         ):
+        # print(f"visual_feature shape: {visual_feature.shape}")  # 例如 (B, V, N, num_features)
+        # print(f"language_feature shape: {language_feature.shape}")  # 例如 (B, C_lang)
+        # print(f"proprio shape: {proprio.shape}")  # 例如 (B, C_proprio)
+        if self.model_type == 'flow-matching':
+            print(f"noise_action shape: {noise_action.shape}")  # 例如 (B, num_action, C_action)
+
         batch_size = visual_feature.shape[0]
         visual_feature = torch.mean(visual_feature, dim=-2, keepdim=False)
         x = torch.cat([visual_feature.view(batch_size, -1), 
                        language_feature,
                        proprio], dim=-1)
         if self.model_type == 'flow-matching': 
+            # print('x.shape', x.shape)
             x = torch.cat([x, noise_action.view(batch_size, -1), self.time_encoder(t)], dim =-1)
+        # print('x.shape', x.shape)
         x = self.in_proj(x)
         for block, ln in zip(self.blocks, self.ln):x = x + block(ln(x))
         return self.out_proj(x).view(batch_size, self.num_action_chunk, -1)
@@ -225,6 +242,51 @@ def mlp_decoder_base(model_type,
     return MlpDecoder(
                 model_type = model_type,
                 depth = 2,
+                hidden_size = 512,
+                mlp_ratio = 4.0,
+                dim_visual = dim_visual,
+                dim_language = dim_language,
+                num_views = 3,
+                dim_proprio = dim_proprio,
+                dim_actions = dim_actions,
+                num_action_chunk = num_action_chunk,
+                num_bins = num_bins
+            )
+
+def mlp_decoder_large(model_type, 
+                     dim_visual,
+                     dim_language,
+                     dim_proprio,
+                     dim_actions, 
+                     num_action_chunk,
+                     num_bins,
+                     **kwarges):
+    return MlpDecoder(
+                model_type = model_type,
+                depth = 6,
+                hidden_size = 512,
+                mlp_ratio = 4.0,
+                dim_visual = dim_visual,
+                dim_language = dim_language,
+                num_views = 3,
+                dim_proprio = dim_proprio,
+                dim_actions = dim_actions,
+                num_action_chunk = num_action_chunk,
+                num_bins = num_bins
+            )
+
+@register_model
+def mlp_decoder_large(model_type, 
+                     dim_visual,
+                     dim_language,
+                     dim_proprio,
+                     dim_actions, 
+                     num_action_chunk,
+                     num_bins,
+                     **kwarges):
+    return MlpDecoder(
+                model_type = model_type,
+                depth = 6,
                 hidden_size = 512,
                 mlp_ratio = 4.0,
                 dim_visual = dim_visual,
