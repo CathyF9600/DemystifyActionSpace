@@ -137,6 +137,7 @@ class TransformerDecoder(nn.Module):
                 t = None # B
             ):
         batch_size = visual_feature.shape[0]
+        # visual_feature = self.visual_proj(visual_feature.view(batch_size, -1, self.dim_visual))
         visual_feature = self.visual_proj(visual_feature.reshape(batch_size, -1, self.dim_visual))
         language_feature = self.language_proj(language_feature).unsqueeze(1)
         proprio = self.proprio_proj(proprio).unsqueeze(1)

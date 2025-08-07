@@ -218,11 +218,11 @@ class InfiniteDataReader(IterableDataset):
             with open(json_p, "r") as f:
                 self.language_aug = json.load(f)
             for idx in index_list:
-                ins = ins = datapath.split('/')[-4].replace('_', ' ') #random.choice(self.language_aug["seen"])
-                print('ins', ins)
+                ins = datapath.split('/')[-3].replace('_', ' ') 
+                # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
-                if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
-                action = action_seq[idx:min(idx+freq, action_seq.shape[0])]
+                # if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
+                action = action_seq[idx:idx+self.num_actions]
                 # if dataset_name == 'robotwin2_abs_ee' or dataset_name == 'robotwin2_abs_qpos':
                 #     action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
                 # images: torch.Tensor, # B V C H W
@@ -230,12 +230,22 @@ class InfiniteDataReader(IterableDataset):
                 # proprio: torch.Tensor,
                 # actions: torch.Tensor 
                 # print('******* action.shape', action.shape)
-                items = {
-                    # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
-                    'images': image_input,
-                    'language_instruction': ins,
-                    'action_seq': torch.tensor(action).to(torch.float32),
-                    'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
+                # print('meta.keys', meta.keys())
+                if 'no_proprio' in meta.keys():
+                    items = {
+                        # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
+                        'images': image_input,
+                        'language_instruction': ins,
+                        'action_seq': torch.tensor(action).to(torch.float32),
+                        'proprio': torch.zeros_like(torch.tensor(prorpio_seq[idx])).to(torch.float32)
+                    }
+                else:
+                    items = {
+                        # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
+                        'images': image_input,
+                        'language_instruction': ins,
+                        'action_seq': torch.tensor(action).to(torch.float32),
+                        'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                     }
                 
                 yield items

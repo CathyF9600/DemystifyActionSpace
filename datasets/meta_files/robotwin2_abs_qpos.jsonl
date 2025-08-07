@@ -1,5 +1,6 @@
 {
   "dataset_name": "robotwin2_abs_qpos",
+  "no_proprio": "true",
   "domain_id": 6,
   "action_key": [
     "joint_action/left_arm",
