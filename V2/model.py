@@ -16,11 +16,11 @@ def basic_init(module):
 
 class language_encoder:
     def __init__(self, meta_path = "encoded_language.pt"):
-        self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
+        self.language_emb = torch.load(meta_path, map_location="cpu")
         
     @torch.no_grad()
     def encode_language(self, language_inputs: str):
-        return {'encoded_language': self.language_emb[language_inputs].unsqueeze(0)}
+        return self.language_emb[language_inputs]
 
 class MlpDecoder(nn.Module):
     def __init__(self, 
