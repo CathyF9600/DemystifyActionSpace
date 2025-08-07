@@ -145,7 +145,6 @@ class TransformerDecoder(nn.Module):
         for block in self.encoder: c = block(c)
         x = self.queries.repeat(batch_size, 1, 1)
         x = x + language_feature
-        t = self.time_encoder(t)
         if self.model_type == 'flow-matching': 
             t = self.time_encoder(t)
             x = x + self.action_in_proj(noise_action)
