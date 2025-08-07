@@ -1,0 +1,175 @@
+import torch
+import torch.nn as nn
+from timm.models.registry import register_model
+from timm.models import create_model
+import timm.models
+from typing import List
+from transformers import AutoTokenizer, SiglipTextModel
+from timm.models.vision_transformer import Mlp
+def basic_init(module):
+    if isinstance(module, nn.Linear):
+        torch.nn.init.xavier_uniform_(module.weight)
+        if module.bias is not None:
+            nn.init.constant_(module.bias, 0)    
+
+class language_encoder(nn.Module):
+    def __init__(self, model_name = "google/siglip-base-patch16-224"):
+        super().__init__()
+        self.model = SiglipTextModel.from_pretrained(model_name)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+    @torch.no_grad()
+    def forward(self, language_inputs: List[str]):
+        inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")        
+        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
+        return {'encoded_language': self.model(**inputs).pooler_output}
+
+class MlpDecoder(nn.Module):
+    def __init__(self, 
+                 depth = 2,
+                 hidden_size = 512,
+                 mlp_ratio = 4.0,
+                 dim_visual = 512,
+                 dim_language = 768,
+                 num_views = 1,
+                 dim_actions = 20,
+                 dim_proprio = 20,
+                 num_action_chunk = 5
+                 ):
+        super().__init__()
+        self.num_action_chunk = num_action_chunk
+        self.dim_actions = dim_actions
+        self.in_proj = Mlp(in_features=dim_visual * num_views + dim_language + dim_proprio, 
+                            hidden_features=int(hidden_size * mlp_ratio), 
+                            out_features=hidden_size,
+                            act_layer=lambda: nn.GELU(approximate="tanh"), 
+                        drop=0.1)
+        self.blocks = nn.ModuleList([Mlp(in_features=hidden_size, 
+                                        hidden_features=int(hidden_size * mlp_ratio), 
+                                        act_layer=lambda: nn.GELU(approximate="tanh"), 
+                                    drop=0.1) for _ in range(depth)])
+        
+        self.ln = nn.ModuleList([nn.LayerNorm(hidden_size) for _ in range(depth)])
+        self.out_proj = nn.Sequential(
+                nn.LayerNorm(hidden_size),
+                nn.Linear(hidden_size, dim_actions * num_action_chunk)
+        )
+        self.apply(basic_init)
+    
+    def forward(self, 
+                visual_feature, # B num_views num_tokens dim_visual
+                language_feature, # B dim_language
+                proprio, # B dim_proprio
+        ):
+        batch_size = visual_feature.shape[0]
+        visual_feature = torch.mean(visual_feature, dim=-2, keepdim=False)
+        x = torch.cat([visual_feature.view(batch_size, -1), 
+                       language_feature,
+                       proprio], dim=-1)
+        x = self.in_proj(x)
+        for block, ln in zip(self.blocks, self.ln): x = x + block(ln(x))
+        return self.out_proj(x).view(batch_size, self.num_action_chunk, -1)
+
+
+class BaseModel(nn.Module):
+    def __init__(self,
+                 vision_backbone = "resnet18.a1_in1k",
+                 model_type = "continuous",
+                 dim_language = 768,
+                 dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                 dim_actions = 20, # 14 for euler angles
+                 num_action_chunk = 10,
+                 action_scale = 100,
+                 **kwargs
+                 ):
+        super().__init__()
+        self.action_scale = action_scale
+        self.model_type = model_type
+        self.num_action_chunk = num_action_chunk
+        self.dim_actions = dim_actions
+        assert model_type in ['continuous', 'discrete', 'flow-matching']
+        self.vision_backbone = create_model(vision_backbone, pretrained=True)
+        del self.vision_backbone.fc
+        self.decoder = MlpDecoder(
+                                    depth = 3,
+                                    hidden_size = 512,
+                                    mlp_ratio = 4.0,
+                                    dim_visual = self.vision_backbone.num_features,
+                                    dim_language = dim_language,
+                                    num_views = 1,
+                                    dim_actions = dim_actions,
+                                    dim_proprio = dim_proprio,
+                                    num_action_chunk = num_action_chunk)
+        self.loss = nn.HuberLoss(delta=0.1)
+        
+
+    def forward(self,
+                images: torch.FloatTensor, # B * V * C * H * W,
+                encoded_language: torch.Tensor, # B C
+                proprio: torch.Tensor, # B C
+                action_seq: torch.Tensor):
+        B, V, C, H, W = images.shape
+        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
+        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
+        _, num_features, N = vision_embedding.shape
+        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
+        output_action = self.decoder(
+            visual_feature = vision_embedding,
+            language_feature = encoded_language,
+            proprio = proprio
+        )
+        return self.loss(output_action, action_seq * self.action_scale)
+        
+    def pred_action(self,
+                images: torch.Tensor, # B V C H W
+                encoded_language: torch.Tensor, # B C
+                proprio: torch.Tensor
+            ):
+        print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        B, V, C, H, W = images.shape
+        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
+        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
+        _, num_features, N = vision_embedding.shape
+        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
+        pred_action = self.decoder(      
+                    visual_feature = vision_embedding,
+                    language_feature = encoded_language,
+                    proprio = proprio)
+        return pred_action / self.action_scale
+
+@register_model
+def model_base(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+    )
+    return model, language_encoder()
+    
+
+
+# if __name__ == "__main__":
+#     model, lang_encoder = model_base(num_action_chunk = 10)
+    
+#     images = torch.randn(1, 1, 3, 224, 224) # B * V * C * H * W,
+#     text = "test"
+#     encoded_language = lang_encoder([text]) # B C
+#     proprio = torch.randn(1, 20) # B C
+#     action_seq = torch.randn(1, 10, 20)
+#     print("start infer")
+
+#     output = model(
+#         images = images,
+#         proprio = proprio,
+#         action_seq = action_seq,
+#         **encoded_language
+#     )
+    
+#     print(output)
