@@ -173,7 +173,8 @@ class MlpDecoder(nn.Module):
         self.dim_actions = dim_actions
         if model_type == 'flow-matching': 
             self.time_encoder = TimeEmbedder(hidden_size // 4)
-            self.in_proj = nn.Linear(dim_visual * num_views + dim_language + dim_proprio + dim_actions * num_action_chunk + hidden_size // 4,
+            self.in_proj = nn.Linear(dim_visual * num_views + dim_language + dim_proprio \
+                                    + dim_actions * num_action_chunk + hidden_size // 4,
                                     hidden_size)
             # print('dim_visual', dim_visual)
             # print('num_views', num_views)

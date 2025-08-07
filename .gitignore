@@ -3,9 +3,11 @@ log/
 EmpiricalStudyForVLA.egg-info/
 *.txt
 runnings/
-
-
+exp_adjust_only/*
+exp/*
+exp*
 */log/
 wandb/
 *.log
 *.ipynb
+last_checkpoint/*
