@@ -41,7 +41,7 @@ def cal_delta_rotate(q1, q2):
 def compute_mean_std(hdf5_paths, control='ee'):
     all_data = []
     for path in hdf5_paths:
-        with h5py.File(path, 'r') as data:
+        with h5py.File(path, 'r') as data:model
             if control == 'qpos':
                 left_joint = data["joint_action/left_arm"][()]      # (T, 7)
                 right_joint = data["joint_action/right_arm"][()]    # (T, 7)

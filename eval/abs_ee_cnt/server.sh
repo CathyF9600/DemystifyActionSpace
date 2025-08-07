@@ -7,7 +7,7 @@ export HF_ENDPOINT=https://hf-mirror.com
 
 
 # ckpt_path=/data/empirical/cnt/abs_ee/ckpt-80000
-ckpt_path=/data/empirical/cnt_no_pro/ee/ckpt-140000
+ckpt_path=/data/empirical/aug5/abs_ee_cnt_mlp_no_proprio/ckpt-400000
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em

@@ -137,15 +137,15 @@ class TransformerDecoder(nn.Module):
                 t = None # B
             ):
         batch_size = visual_feature.shape[0]
-        visual_feature = self.visual_proj(visual_feature.view(batch_size, -1, self.dim_visual))
+        visual_feature = self.visual_proj(visual_feature.reshape(batch_size, -1, self.dim_visual))
         language_feature = self.language_proj(language_feature).unsqueeze(1)
         proprio = self.proprio_proj(proprio).unsqueeze(1)
         c = torch.cat([visual_feature, proprio], dim = 1)
         for block in self.encoder: c = block(c)
         x = self.queries.repeat(batch_size, 1, 1)
         x = x + language_feature
-        t = self.time_encoder(t)
         if self.model_type == 'flow-matching': 
+            t = self.time_encoder(t)
             x = x + self.action_in_proj(noise_action)
             for block in self.decoder: x = block(x, c, t)
         else:
