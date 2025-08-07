@@ -61,6 +61,7 @@ class InfiniteDataReader(IterableDataset):
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
+        self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
 
     def read_hdf5(self, dataset_name, idx):
         meta = self.metas[dataset_name]
@@ -134,6 +135,8 @@ class InfiniteDataReader(IterableDataset):
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
                 left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
                 right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                left_grip = 1 - left_grip * 2
+                right_grip = 1 - right_grip * 2
                 prorpio_seq = np.concatenate([
                     left_joint,                        # (T,7)
                     left_grip[:, None],             # (T,1)
@@ -151,13 +154,13 @@ class InfiniteDataReader(IterableDataset):
             else: raise NotImplementedError
             
             random.shuffle(index_list)
-            for idx in index_list[:10]:
-                ins = datapath.split('/')[-3].replace('_', ' ') 
+            for idx in index_list:
+                ins = datapath.split('/')[-4].replace('_', ' ') 
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
                 items = {
                         'images': image_input,
-                        'language_instruction': ins,
+                        'encoded_language': self.language_emb[ins],
                         'action_seq': torch.tensor(action).to(torch.float32),
                         'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                     }
@@ -180,14 +183,6 @@ class InfiniteDataReader(IterableDataset):
                 def get_next_item():
                     try: return next(generators[i])
                     except StopIteration:
-                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                        return get_next_item()
-                    except Exception as e:
-                        meta = self.metas[dataset_names[i]]
-                        with open("error_data.log", "a+") as f:
-                            f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
-                        print(meta['datalist'][idx[i]], f':{e}')
                         idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
                         generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
                         return get_next_item()

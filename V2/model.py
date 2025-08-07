@@ -6,23 +6,21 @@ import timm.models
 from typing import List
 from transformers import AutoTokenizer, SiglipTextModel
 from timm.models.vision_transformer import Mlp
+
+
 def basic_init(module):
     if isinstance(module, nn.Linear):
         torch.nn.init.xavier_uniform_(module.weight)
         if module.bias is not None:
             nn.init.constant_(module.bias, 0)    
 
-class language_encoder(nn.Module):
-    def __init__(self, model_name = "google/siglip-base-patch16-224"):
-        super().__init__()
-        self.model = SiglipTextModel.from_pretrained(model_name)
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+class language_encoder:
+    def __init__(self, meta_path = "encoded_language.pt"):
+        self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
         
     @torch.no_grad()
-    def forward(self, language_inputs: List[str]):
-        inputs = self.tokenizer(language_inputs, padding="max_length", return_tensors="pt")        
-        inputs = {k: v.to(self.model.device) for k, v in inputs.items()}
-        return {'encoded_language': self.model(**inputs).pooler_output}
+    def encode_language(self, language_inputs: str):
+        return {'encoded_language': self.language_emb[language_inputs].unsqueeze(0)}
 
 class MlpDecoder(nn.Module):
     def __init__(self, 

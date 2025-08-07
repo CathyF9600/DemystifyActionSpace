@@ -24,10 +24,8 @@ def get_args_parser():
     parser.add_argument('--batch-size', default=16, type=int)
     parser.add_argument('--learning_rate', default=1e-4, type=float)
     parser.add_argument('--iters', default=1000000, type=int)
-    parser.add_argument('--train_metas_path', nargs='+', type=str)
-    parser.add_argument('--eval_metas_path', nargs='+', type=str)
-    parser.add_argument('--precision', default='fp16', type=str)
-    
+    parser.add_argument('--train_metas_path', type=str)
+    parser.add_argument('--precision', default='no', type=str)
     
     parser.add_argument('--model', default='HFP_base', type=str)
     parser.add_argument('--learning_coef', default=1., type=float)
@@ -54,13 +52,13 @@ def get_args_parser():
 
 def main(args):
     output_dir = Path(args.output_dir)
-    kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+    kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
     accelerator = Accelerator(mixed_precision = args.precision,
                               log_with="tensorboard", 
                               project_dir=output_dir, kwargs_handlers=[kwargs])
     accelerator.init_trackers("HFP_Training")
     torch.distributed.barrier()
-    model, text_processor = create_model(args.model)
+    model, _ = create_model(args.model)
     if args.pretrained is not None:
         accelerator.print('>>>>>> load pretrain from {}'.format(args.pretrained))
         print(model.load_state_dict(load_file(args.pretrained), strict=False))
@@ -71,8 +69,7 @@ def main(args):
         world_size = args.world_size,
         batch_size = args.batch_size,
         metas_path = args.train_metas_path,
-        num_actions= model.num_action_chunk,
-        training=True
+        num_actions= model.num_action_chunk
     ))
     
     model = model.to(torch.float32)
@@ -92,30 +89,24 @@ def main(args):
     model.train()
     accelerator.print(f"Start training for {args.iters} iters")
     for iters in range(args.iters):
-        
         past_time = time.time()
         data = next(train_dataloader)
-        language_instruction = text_processor(data['language_instruction'])
-        del data['language_instruction']
         inputs = {
             **{key: value.cuda(non_blocking=True) for key, value in data.items()},
-            **{key: value.cuda(non_blocking=True) for key, value in language_instruction.items()}
         }
         optim.zero_grad()
-        loss_dict, log_dict = model(**inputs)
-        loss = sum(loss_dict.values())
+        loss = model(**inputs)
         accelerator.backward(loss)
         optim.step()
         if iters % args.log_interval == 0: 
-            accelerator.log(log_dict, step=iters)
+            accelerator.log({'loss': loss.item()}, step=iters)
             accelerator.print(f"[Iter {iters}] [Training Loss] {loss.item()} [time_per_iter] {time.time() - past_time}")
             
-        if iters % args.save_interval == 0:
+        if iters % args.save_interval == 0 and iters != 0:
             model.eval()
             accelerator.print("========start saving models=========")
             accelerator.save_state(os.path.join(output_dir, f"last_checkpoint"),
                                    safe_serialization=True)
-            accelerator.wait_for_everyone()
             model.train()
         accelerator.wait_for_everyone()
     accelerator.save_state(os.path.join(output_dir, f"ckpt-final"))
