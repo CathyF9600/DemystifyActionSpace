@@ -14,17 +14,7 @@ import random
 import math
 import cv2
 from scipy.spatial.transform import Rotation as R
-from scipy.interpolate import interp1d
 
-def read_video_to_frames(data_path):
-    buf = io.BytesIO(fileio.get(data_path))
-    container = av.open(buf)
-    frames = []
-    for packet in container.demux(video=0):
-        for frame in packet.decode():
-            img = frame.to_ndarray(format='rgb24')  
-            frames.append(img)
-    return np.stack(frames, axis=0)
 
 def decode_image_from_bytes(camera_rgb_image):
     if isinstance(camera_rgb_image, (bytes, bytearray)): camera_rgb_image = np.frombuffer(camera_rgb_image, dtype=np.uint8)
@@ -40,34 +30,11 @@ def decode_image_from_bytes(camera_rgb_image):
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
     return R.from_quat(q).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
 
-def euler_xyz_to_rotate6D(q: np.ndarray) -> np.ndarray:
-    return R.from_euler('xyz', q, degrees=False).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
-
 def cal_delta_rotate(q1, q2):
     q1 = R.from_quat(q1)
     q2 = R.from_quat(q2)
     del_rotate = q1 * q2.inv()
     return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
-
-def convert_hdf5_to_json(hdf5_path): # for RoboTwin
-    # 替换基础目录
-    json_path = hdf5_path.replace("/downloaded_data/", "/instruction_data/")
-    
-    # 替换中间路径和扩展名
-    json_path = json_path.replace("/data/episode", "/instructions/episode")
-    json_path = json_path.replace(".hdf5", ".json")
-    
-    return json_path
-
-from pathlib import Path
-
-def get_task_name(hdf5_path): # for RoboTwin
-    p = Path(hdf5_path)
-    # 找到/downloaded_data/的父目录
-    for parent in p.parents:
-        if parent.name == "downloaded_data":
-            return p.relative_to(parent).parts[0]
-    return None
 
 class InfiniteDataReader(IterableDataset):
     def __init__(self,
@@ -75,24 +42,18 @@ class InfiniteDataReader(IterableDataset):
                  world_size:int,
                  metas_path:str,
                  num_actions = 10,
-                 num_views = 3
                  ):
         #### read meta files, please put all json file in a one directory（metas_path）
         self.rank = rank
         self.world_size = world_size
         self.metas = {}
         self.num_actions = num_actions
-        self.num_views = num_views
         # reading setting
-        if fileio.isdir(metas_path): meta_files = fileio.list_dir_or_file(metas_path, suffix='.json', recursive=True, list_dir=False)
-        else: meta_files, metas_path = [metas_path], ""
-        for file in meta_files:
-            with io.BytesIO(fileio.get(fileio.join_path(metas_path, file))) as f:
-                meta = json.load(f)
-                print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
-                random.shuffle(meta['datalist'])
-                self.metas[meta['dataset_name']] = meta
-
+        with io.BytesIO(fileio.get(metas_path)) as f:
+            meta = json.load(f)
+            print(f"================detect dataset {meta['dataset_name']} with traj {len(meta['datalist'])}==================")
+            random.shuffle(meta['datalist'])
+            self.metas[meta['dataset_name']] = meta
         # augmentations
         self.image_aug = transforms.Compose([
             transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
@@ -100,18 +61,7 @@ class InfiniteDataReader(IterableDataset):
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
-        # with open("/mnt/petrelfs/zhengjinliang/HeteroDiffusionPolicy/HeteroFlowPolicy/datasets/utils/new_playtable.json", "r") as f:
-        #     self.language_aug = json.load(f)
-        self.language_aug = None
-        # print('metas_path', fileio.join_path(metas_path, file))
-        stats_file = fileio.join_path(metas_path, file).replace(".jsonl", "_global_stats.npz")
-        print('Loading relative mean and std from', stats_file)
-        stats = np.load(stats_file)
-        self.global_mean = np.asarray(stats["mean"])
-        self.global_std = np.asarray(stats["std"])
-        # print('self.global_mean', self.global_mean)
-        # print('self.global_std', self.global_std)
-        # import pdb; pdb.set_trace()
+        self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
 
     def read_hdf5(self, dataset_name, idx):
         meta = self.metas[dataset_name]
@@ -126,45 +76,6 @@ class InfiniteDataReader(IterableDataset):
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
                 right_grip = data["endpose/right_gripper"][()]  # shape (T,)
-                # left_grip = 1 - left_grip * 2
-                # right_grip = 1 - right_grip * 2
-                action_seq = np.concatenate([
-                    left_ee[:, :3],
-                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_ee[:, :3],
-                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
-                    right_grip[:, None]             # (T,1)
-                ], axis=-1)
-                prorpio_seq = action_seq
-                action_seq = action_seq[1:]
-                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-
-            elif dataset_name == 'robotwin2_abs_qpos': # 14
-                freq = self.num_actions  # adjust if needed
-                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
-                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
-                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
-                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
-                # left_grip = 1 - left_grip * 2
-                # right_grip = 1 - right_grip * 2
-                action_seq = np.concatenate([
-                    left_joint,                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_joint,                    # (T,7)
-                    right_grip[:, None]             # (T,1)
-                ], axis=-1)
-                prorpio_seq = action_seq
-                action_seq = action_seq[1:]
-                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-            elif dataset_name == 'robotwin2_rel_ee':
-                freq = self.num_actions  # adjust if needed
-                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
-                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
-                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
-                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
                 prorpio_seq = np.concatenate([
                     left_ee[:, :3],
                     quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
@@ -173,7 +84,37 @@ class InfiniteDataReader(IterableDataset):
                     quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
+                action_seq = prorpio_seq[1:]
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
 
+            elif dataset_name == 'robotwin2_abs_qpos': # 14
+                freq = self.num_actions  # adjust if needed
+                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
+                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                prorpio_seq = np.concatenate([
+                    left_joint,                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_joint,                    # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                action_seq = prorpio_seq[1:]
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+            elif dataset_name == 'robotwin2_rel_ee':
+                freq = self.num_actions  # adjust if needed
+                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
+                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
+                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
+                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
+                prorpio_seq = np.concatenate([
+                    left_ee[:, :3],
+                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_ee[:, :3],
+                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
                 left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
                 right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
                 left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
@@ -213,46 +154,20 @@ class InfiniteDataReader(IterableDataset):
             else: raise NotImplementedError
             
             random.shuffle(index_list)
-            json_p = convert_hdf5_to_json(datapath)
-            # print('json_p', json_p)
-            with open(json_p, "r") as f:
-                self.language_aug = json.load(f)
             for idx in index_list:
-                ins = datapath.split('/')[-3].replace('_', ' ') 
-                # print('ins', ins)
+                ins = datapath.split('/')[-4].replace('_', ' ') 
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
-                # if image_input.size(0) < self.num_views: image_input = torch.cat([image_input, image_input.new_zeros(self.num_views-image_input.size(0), *image_input.shape[1:])], dim=0) 
                 action = action_seq[idx:idx+self.num_actions]
-                # if dataset_name == 'robotwin2_abs_ee' or dataset_name == 'robotwin2_abs_qpos':
-                #     action = interp1d(np.arange(len(action)), action, axis=0)(np.linspace(0, len(action)-1, self.num_actions))
-                # images: torch.Tensor, # B V C H W
-                # encoded_language: torch.Tensor, # B C
-                # proprio: torch.Tensor,
-                # actions: torch.Tensor 
-                # print('******* action.shape', action.shape)
-                # print('meta.keys', meta.keys())
-                if 'no_proprio' in meta.keys():
-                    items = {
-                        # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
+                items = {
                         'images': image_input,
-                        'language_instruction': ins,
-                        'action_seq': torch.tensor(action).to(torch.float32),
-                        'proprio': torch.zeros_like(torch.tensor(prorpio_seq[idx])).to(torch.float32)
-                    }
-                else:
-                    items = {
-                        # 'hetero_info': torch.tensor(meta['domain_id']),# only 1 domain for this project
-                        'images': image_input,
-                        'language_instruction': ins,
+                        'encoded_language': self.language_emb[ins],
                         'action_seq': torch.tensor(action).to(torch.float32),
                         'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                     }
-                
                 yield items
                
     def get_generator(self, dataset_name, idx):
-         if dataset_name == "AGIBOT": return iter(self.read_lerobot(dataset_name, idx))
-         else: return iter(self.read_hdf5(dataset_name, idx))
+        return iter(self.read_hdf5(dataset_name, idx))
     
     def __iter__(self):
         worker_info = torch.utils.data.get_worker_info()
@@ -271,14 +186,6 @@ class InfiniteDataReader(IterableDataset):
                         idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
                         generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
                         return get_next_item()
-                    except Exception as e:
-                        meta = self.metas[dataset_names[i]]
-                        with open("error_data.log", "a+") as f:
-                            f.write(f"{meta['datalist'][idx[i]]} :{e}\n")
-                        print(meta['datalist'][idx[i]], f':{e}')
-                        idx[i] = (idx[i] + self.world_size) % len(self.metas[dataset_names[i]]['datalist'])
-                        generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
-                        return get_next_item()
                 yield get_next_item()
 
 
@@ -288,7 +195,6 @@ def create_dataloader(
                  batch_size: int,
                  metas_path:str,
                  num_actions,
-                 num_views = 3
                  ):
     return DataLoader(
             InfiniteDataReader(
@@ -296,7 +202,6 @@ def create_dataloader(
                  world_size = world_size,
                  metas_path = metas_path,
                  num_actions = num_actions,
-                 num_views = num_views
                  ),
             batch_size=batch_size,
             num_workers=4,

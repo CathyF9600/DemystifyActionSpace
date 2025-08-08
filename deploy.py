@@ -90,12 +90,9 @@ class DeployModel:
             # print('language_inputs', payload['language_instruction'])
             # print('image_inputs', image_input)
             inputs = {
-                # **{key: value.cuda(non_blocking=True) for key, value in language_inputs.items()},
-                # **{key: value.cuda(non_blocking=True) for key, value in image_inputs.items()},
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
                 'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                # 'hetero_info': torch.tensor(self.meta['domain_id']).unsqueeze(0).cuda(non_blocking=True),
                 'steps': self.denoising_steps
             }
             
