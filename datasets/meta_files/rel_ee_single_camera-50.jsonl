@@ -1,7 +1,5 @@
 {
-  "dataset_name": "robotwin2_abs_ee",
-  "no_proprio": "true",
-  "domain_id": 9,
+  "dataset_name": "robotwin2_rel_ee",
   "action_key": [
     "endpose/left_endpose",
     "endpose/right_endpose",
@@ -10,9 +8,7 @@
   ],
   "language_instruction_key": "task_name",
   "observation_key": [
-    "observation/head_camera/rgb",
-    // "observation/left_camera/rgb",
-    // "observation/right_camera/rgb"
+    "observation/head_camera/rgb"
   ],
   "delta_position_scale": 1,
   "delta_orientation_scale": 1,

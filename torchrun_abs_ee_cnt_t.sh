@@ -6,7 +6,7 @@ export HF_HUB_DISABLE_XET=True
 export WANDB_API_KEY=56c323ace61a5076f5d8e92a91237607bbc362a7
 export TORCH_DISTRIBUTED_DEBUG=DETAIL
 
-port=13537
+port=13536
 name=abs_ee_cnt_t_no_proprio
 source /home/anaconda3/etc/profile.d/conda.sh
 conda deactivate
@@ -17,9 +17,9 @@ torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --m
   --decoder_name transformer_decoder_base \
   --batch-size 32 \
   --dim_actions 20 \
-  --num_actions 30 \
+  --num_actions 10 \
   --learning_rate 5e-4 \
-  --precision bf16 \
+  --precision no \
   --port $port \
   --output_dir runnings/RoboTwin/$name \
   --wandb_name $name \

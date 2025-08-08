@@ -1,18 +1,14 @@
 {
-  "dataset_name": "robotwin2_abs_ee",
-  "no_proprio": "true",
-  "domain_id": 9,
+  "dataset_name": "robotwin2_abs_qpos",
   "action_key": [
-    "endpose/left_endpose",
-    "endpose/right_endpose",
-    "endpose/left_gripper",
-    "endpose/right_gripper"
+    "joint_action/left_arm",
+    "joint_action/right_arm",
+    "joint_action/left_gripper",
+    "joint_action/right_gripper"
   ],
   "language_instruction_key": "task_name",
   "observation_key": [
-    "observation/head_camera/rgb",
-    // "observation/left_camera/rgb",
-    // "observation/right_camera/rgb"
+    "observation/head_camera/rgb"
   ],
   "delta_position_scale": 1,
   "delta_orientation_scale": 1,

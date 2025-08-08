@@ -1,5 +1,6 @@
 {
   "dataset_name": "robotwin2_abs_ee",
+  "no_proprio": "true",
   "domain_id": 9,
   "action_key": [
     "endpose/left_endpose",

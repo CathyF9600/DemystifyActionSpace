@@ -41,13 +41,18 @@ class InfiniteDataReader(IterableDataset):
                  rank:int,
                  world_size:int,
                  metas_path:str,
+                 model_type:str,
                  num_actions = 10,
+                 num_bins = 256
                  ):
         #### read meta files, please put all json file in a one directory（metas_path）
         self.rank = rank
+        self.discretize = False
+        self.num_bins = num_bins
         self.world_size = world_size
         self.metas = {}
         self.num_actions = num_actions
+        if model_type == 'discrete': self.discretize = True
         # reading setting
         with io.BytesIO(fileio.get(metas_path)) as f:
             meta = json.load(f)
@@ -62,6 +67,21 @@ class InfiniteDataReader(IterableDataset):
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
         self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
+        print('metas_path', metas_path)
+        if 'rel' in metas_path or self.discretize:
+            stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats.npz")
+            print('Loading relative mean and std from', stats_file)
+            stats = np.load(stats_file)
+            self.global_mean = np.asarray(stats["mean"])
+            self.global_std = np.asarray(stats["std"])
+            self.global_min = np.asarray(stats["min"])
+            self.global_max = np.asarray(stats["max"])
+            
+    def quantize_action(self, action):
+        # Normalize to [0, 1] using precomputed global min/max
+        action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
+        action = np.clip(action, 0, 1)
+        return (action * (self.num_bins - 1)).astype(np.int64)
 
     def read_hdf5(self, dataset_name, idx):
         meta = self.metas[dataset_name]
@@ -155,13 +175,21 @@ class InfiniteDataReader(IterableDataset):
             
             random.shuffle(index_list)
             for idx in index_list:
-                ins = datapath.split('/')[-4].replace('_', ' ') 
+                ins = datapath.split('/')[-3].replace('_', ' ')  # -4
+                # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
+                if self.discretize:
+                    action = self.quantize_action(action)
+                    action_tensor = torch.tensor(action, dtype=torch.long)
+                    # print('action_tensor', action_tensor)
+                else:
+                    action_tensor = torch.tensor(action, dtype=torch.float32)
+
                 items = {
                         'images': image_input,
                         'encoded_language': self.language_emb[ins],
-                        'action_seq': torch.tensor(action).to(torch.float32),
+                        'action_seq': action_tensor,
                         'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                     }
                 yield items
@@ -195,6 +223,8 @@ def create_dataloader(
                  batch_size: int,
                  metas_path:str,
                  num_actions,
+                 model_type,
+                 num_bins
                  ):
     return DataLoader(
             InfiniteDataReader(
@@ -202,6 +232,8 @@ def create_dataloader(
                  world_size = world_size,
                  metas_path = metas_path,
                  num_actions = num_actions,
+                 model_type = model_type,
+                 num_bins = num_bins
                  ),
             batch_size=batch_size,
             num_workers=4,
