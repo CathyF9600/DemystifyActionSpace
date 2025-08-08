@@ -18,7 +18,7 @@ torchrun --nproc-per-node=2 --nnodes=1 --node-rank=0 --master-addr=localhost --m
   --batch-size 32 \
   --dim_actions 20 \
   --learning_rate 5e-4 \
-  --precision bf16 \
+  --precision no \
   --port $port \
   --output_dir runnings/RoboTwin/abs_ee_flow \
   --wandb_name robotwin2_abs_ee_flow \
