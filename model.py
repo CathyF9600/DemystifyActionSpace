@@ -134,7 +134,3 @@ class BaseModel(nn.Module):
                     language_feature = encoded_language,
                     proprio = proprio)
         return pred_action
-
-    
-
-

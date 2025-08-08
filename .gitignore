@@ -11,3 +11,4 @@ wandb/
 *.log
 *.ipynb
 last_checkpoint/*
+HFP_Training/
