@@ -1,14 +1,12 @@
 import model
 import torch.nn as nn
 from timm.models import create_model
-from model import BaseModel, language_encoder
 from safetensors.torch import load_file
 import io
 from mmengine import fileio
 import json_numpy
 import argparse
 import os
-json_numpy.patch()
 import json
 import logging
 import traceback
@@ -22,7 +20,7 @@ import torch
 from scipy.spatial.transform import Rotation as R
 from torchvision import transforms
 from torchvision.transforms import InterpolationMode
-import model
+
 
 class DeployModel:
     def __init__(self, 
@@ -32,7 +30,8 @@ class DeployModel:
                 ):
         self.device = device
         self.model, self.lang_encoder = create_model(model_name)
-        print(self.model.load_state_dict(load_file(ckpt_path), strict=False))
+        ckpt = load_file(ckpt_path)
+        print(self.model.load_state_dict(ckpt, strict=False))
         self.model.to(torch.float32).to(self.device)
         # augmentations
         self.image_aug = transforms.Compose([
@@ -46,7 +45,7 @@ class DeployModel:
             self.model.eval()
             image_list = []        
             if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"])))
-            language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsuqeeze(0)
+            language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsqueeze(0)
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
             proprio = np.array(json_numpy.loads(payload['proprio']))
             # save lang
@@ -92,7 +91,7 @@ def main():
     print("-"*88)
     # load your model
     server = DeployModel(
-        ckpt_path = args.ckpt_path,
+        ckpt_path = ckpt_path,
         model_name = args.model_name
     )  
     server.run(host=kwargs['host'], port=kwargs['port'])

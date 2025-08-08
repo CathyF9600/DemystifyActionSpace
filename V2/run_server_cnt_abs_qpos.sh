@@ -1,10 +1,10 @@
 #!/bin/bash
-port=18880
+port=18881
 export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
-ckpt_path=/data/empirical/aug8/cnt_abs_ee
+ckpt_path=/data/empirical/aug8/cnt_abs_qpos
 model_name='model_base'
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh

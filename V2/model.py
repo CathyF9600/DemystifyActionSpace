@@ -7,6 +7,8 @@ from typing import List
 from transformers import AutoTokenizer, SiglipTextModel
 from timm.models.vision_transformer import Mlp
 
+print("model init")
+
 
 def basic_init(module):
     if isinstance(module, nn.Linear):
@@ -17,6 +19,7 @@ def basic_init(module):
 class language_encoder:
     def __init__(self, meta_path = "encoded_language.pt"):
         self.language_emb = torch.load(meta_path, map_location="cpu")
+        print(f"successfully load language hub: {self.language_emb.keys()}")
         
     @torch.no_grad()
     def encode_language(self, language_inputs: str):
