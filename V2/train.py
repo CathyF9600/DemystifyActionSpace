@@ -228,8 +228,10 @@ def main(args):
         if iters % args.save_interval == 0 and iters != 0:
             model.eval()
             accelerator.print("========start saving models=========")
-            accelerator.save_state(os.path.join(output_dir, f"last_checkpoint"),
-                                   safe_serialization=True)
+            # accelerator.save_state(os.path.join(output_dir, f"last_checkpoint"),
+            #                        safe_serialization=True)
+            accelerator.save_state(os.path.join(output_dir, f"ckpt-{iters}"), 
+                                    safe_serialization=True)
             model.train()
         accelerator.wait_for_everyone()
     accelerator.save_state(os.path.join(output_dir, f"ckpt-final"))
