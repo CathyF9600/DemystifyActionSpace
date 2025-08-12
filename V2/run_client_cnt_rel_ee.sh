@@ -1,6 +1,6 @@
 #!/bin/bash
-port=18885
-export CUDA_VISIBLE_DEVICES=1
+port=18884
+export CUDA_VISIBLE_DEVICES=0
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
@@ -10,10 +10,10 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt_abs_ee-25w
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt_rel_ee-100w
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
-    --data_type abs \
+    --data_type rel \
     --action_type ee \
     --host 0.0.0.0 \
     --port $port \
@@ -24,7 +24,9 @@ python script/robotwin_client_v2.py \
     --task_name all \
     --output_path $eval_log_dir \
     --task_config demo_randomized \
-    --instruction_type seen #> $eval_log_dir/log.txt 2>&1
+    --instruction_type seen \
+    # --hdf5_path /home/dodo/fyc/RoboTwin/data/adjust_bottle/demo_randomized/data/episode0.hdf5
+    #> $eval_log_dir/log.txt 2>&1
 
 # PID=$(lsof -i :$port -t)
 # kill -9 $PID

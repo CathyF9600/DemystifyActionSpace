@@ -90,6 +90,10 @@ class BaseModel(nn.Module):
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
         self.dim_actions = dim_actions
+        if model_type == 'discrete':
+            assert num_bins > 0, "num_bins must be greater than 0 for discrete models"
+        else:
+            assert num_bins == 1, "num_bins must be 1 for continuous models"
         self.num_bins = num_bins
         assert model_type in ['continuous', 'discrete', 'flow-matching']
         self.vision_backbone = create_model(vision_backbone, pretrained=True)
@@ -104,7 +108,7 @@ class BaseModel(nn.Module):
                                     dim_actions = dim_actions,
                                     dim_proprio = dim_proprio,
                                     num_action_chunk = num_action_chunk,
-                                    num_bins = num_bins)
+                                    num_bins = self.num_bins)
         if model_type == 'discrete': self.loss = nn.CrossEntropyLoss()
         else: self.loss = nn.HuberLoss(delta=0.1)
 
@@ -133,7 +137,7 @@ class BaseModel(nn.Module):
                 encoded_language: torch.Tensor, # B C
                 proprio: torch.Tensor
             ):
-        print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -166,6 +170,7 @@ def model_abs_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -182,6 +187,7 @@ def model_abs_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -198,6 +204,7 @@ def model_rel_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 1,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -214,6 +221,7 @@ def model_rel_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 1,
+        num_bins = 1
     )
     return model, language_encoder()
 

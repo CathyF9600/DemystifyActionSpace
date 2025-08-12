@@ -155,8 +155,6 @@ class InfiniteDataReader(IterableDataset):
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
                 left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
                 right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
                 prorpio_seq = np.concatenate([
                     left_joint,                        # (T,7)
                     left_grip[:, None],             # (T,1)

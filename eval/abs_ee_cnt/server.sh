@@ -11,6 +11,7 @@ ckpt_path=/data/empirical/aug7/abs_ee_cnt_t_no_proprio_adjust/ckpt-20000
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
+env > script_env.txt
 python /home/dodo/fyc/EmpiricalStudyForVLA/deploy.py \
     --ckpt_path $ckpt_path \
     --decoder_name transformer_decoder_base \
