@@ -12,4 +12,6 @@ wandb/
 *.ipynb
 last_checkpoint/*
 HFP_Training/
+*.mp4
+/eval/*
 *.npz

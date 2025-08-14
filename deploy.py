@@ -87,7 +87,7 @@ class DeployModel:
             print("language:", payload['language_instruction'])
             print('current proprio', proprio)
 
-            # print('language_inputs', payload['language_instruction'])
+            print("payload['data_type']", payload['data_type'])
             # print('image_inputs', image_input)
             inputs = {
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
@@ -98,7 +98,7 @@ class DeployModel:
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
-                print(action)
+                print('action', action)
                 if 'data_type' in payload.keys():
                     if payload['data_type'] == 'rel':
                         print('action', action.shape)
@@ -106,7 +106,7 @@ class DeployModel:
                         action_sum = action.cumsum(axis=1) + proprio
                         print('action_sum', action_sum)
             return JSONResponse(
-                {'action': action.tolist()})
+                {'action': action.tolist(), 'action_sum': action_sum.tolist()})
         
         except:  # noqa: E722
             logging.error(traceback.format_exc())

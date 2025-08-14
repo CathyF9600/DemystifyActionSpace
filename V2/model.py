@@ -7,6 +7,8 @@ from typing import List
 from transformers import AutoTokenizer, SiglipTextModel
 from timm.models.vision_transformer import Mlp
 
+print("model init")
+
 
 def basic_init(module):
     if isinstance(module, nn.Linear):
@@ -16,7 +18,8 @@ def basic_init(module):
 
 class language_encoder:
     def __init__(self, meta_path = "encoded_language.pt"):
-        self.language_emb = torch.load(meta_path, map_location="cuda")
+        self.language_emb = torch.load(meta_path, map_location="cpu")
+        print(f"successfully load language hub: {self.language_emb.keys()}")
         
     @torch.no_grad()
     def encode_language(self, language_inputs: str):
@@ -87,6 +90,10 @@ class BaseModel(nn.Module):
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
         self.dim_actions = dim_actions
+        if model_type == 'discrete':
+            assert num_bins > 0, "num_bins must be greater than 0 for discrete models"
+        else:
+            assert num_bins == 1, "num_bins must be 1 for continuous models"
         self.num_bins = num_bins
         print('Number of num_bins', num_bins)
         assert model_type in ['continuous', 'discrete', 'flow-matching']
@@ -102,7 +109,7 @@ class BaseModel(nn.Module):
                                     dim_actions = dim_actions,
                                     dim_proprio = dim_proprio,
                                     num_action_chunk = num_action_chunk,
-                                    num_bins = num_bins)
+                                    num_bins = self.num_bins)
         if model_type == 'discrete': self.loss = nn.CrossEntropyLoss()
         else: self.loss = nn.HuberLoss(delta=0.1)
 
@@ -131,7 +138,7 @@ class BaseModel(nn.Module):
                 encoded_language: torch.Tensor, # B C
                 proprio: torch.Tensor
             ):
-        print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
