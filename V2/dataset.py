@@ -69,8 +69,12 @@ class InfiniteDataReader(IterableDataset):
         self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
         print('metas_path', metas_path)
         if 'rel' in metas_path or self.discretize:
-            stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats.npz")
-            print('Loading relative mean and std from', stats_file)
+            if 'rel' in metas_path:
+                data_type = 'rel'
+            else:
+                data_type = 'abs'
+            stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats_" + data_type + ".npz")
+            print('Loading mean and std from', stats_file)
             stats = np.load(stats_file)
             self.global_mean = np.asarray(stats["mean"])
             self.global_std = np.asarray(stats["std"])
@@ -106,7 +110,7 @@ class InfiniteDataReader(IterableDataset):
                 ], axis=-1)
                 action_seq = prorpio_seq[1:]
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-
+                # print('action_seq', action_seq[:10])
             elif dataset_name == 'robotwin2_abs_qpos': # 14
                 freq = self.num_actions  # adjust if needed
                 left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
@@ -178,9 +182,10 @@ class InfiniteDataReader(IterableDataset):
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
                 if self.discretize:
-                    action = self.quantize_action(action)
-                    action_tensor = torch.tensor(action, dtype=torch.long)
-                    # print('action_tensor', action_tensor)
+                    # print('original action', action[:10])
+                    q_action = self.quantize_action(action)
+                    action_tensor = torch.tensor(q_action, dtype=torch.long)
+                    # print('quantized action', q_action[:10])
                 else:
                     action_tensor = torch.tensor(action, dtype=torch.float32)
 

@@ -76,48 +76,68 @@ def cal_delta_rotate(q1, q2):
     del_rotate = q1 * q2.inv()
     return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
 
-def compute_mean_std(hdf5_paths, control='ee'):
+def compute_mean_std(hdf5_paths, control='ee', data_type='rel'):
     all_data = []
     for path in hdf5_paths:
         with h5py.File(path, 'r') as data:
-            if control == 'qpos':
-                left_joint = data["joint_action/left_arm"][()]      # (T, 7)
-                right_joint = data["joint_action/right_arm"][()]    # (T, 7)
-                left_grip = data["joint_action/left_gripper"][()]   # (T,)
-                right_grip = data["joint_action/right_gripper"][()] # (T,)
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
+            if data_type =='rel':
+                if control == 'qpos':
+                    left_joint = data["joint_action/left_arm"][()]      # (T, 7)
+                    right_joint = data["joint_action/right_arm"][()]    # (T, 7)
+                    left_grip = data["joint_action/left_gripper"][()]   # (T,)
+                    right_grip = data["joint_action/right_gripper"][()] # (T,)
+                    joint_diff = np.concatenate([
+                        left_joint[1:] - left_joint[:-1],
+                        left_grip[1:, None],
+                        right_joint[1:] - right_joint[:-1],
+                        right_grip[1:, None]
+                    ], axis=-1)
+                    action_seq = joint_diff
 
-                joint_diff = np.concatenate([
-                    left_joint[1:] - left_joint[:-1],
-                    left_grip[1:, None],
-                    right_joint[1:] - right_joint[:-1],
-                    right_grip[1:, None]
-                ], axis=-1)
-                action_seq = joint_diff
+                else:
+                    left_pos = data["endpose/left_endpose"][()]
+                    right_pos = data["endpose/right_endpose"][()]
+                    left_grip = data["endpose/left_gripper"][()]
+                    right_grip = data["endpose/right_gripper"][()]
+                    left_delta_xyz = left_pos[1:, :3] - left_pos[:-1, :3]
+                    right_delta_xyz = right_pos[1:, :3] - right_pos[:-1, :3]
 
-            else:
-                left_pos = data["endpose/left_endpose"][()]
-                right_pos = data["endpose/right_endpose"][()]
-                left_grip = data["endpose/left_gripper"][()]
-                right_grip = data["endpose/right_gripper"][()]
-                left_grip = 1 - left_grip * 2
-                right_grip = 1 - right_grip * 2
+                    left_delta_rot6d = cal_delta_rotate(left_pos[1:, 3:], left_pos[:-1, 3:])
+                    right_delta_rot6d = cal_delta_rotate(right_pos[1:, 3:], right_pos[:-1, 3:])
 
-                left_delta_xyz = left_pos[1:, :3] - left_pos[:-1, :3]
-                right_delta_xyz = right_pos[1:, :3] - right_pos[:-1, :3]
-
-                left_delta_rot6d = cal_delta_rotate(left_pos[1:, 3:], left_pos[:-1, 3:])
-                right_delta_rot6d = cal_delta_rotate(right_pos[1:, 3:], right_pos[:-1, 3:])
-
-                action_seq = np.concatenate([
-                    left_delta_xyz,
-                    left_delta_rot6d,
-                    left_grip[1:, None],
-                    right_delta_xyz,
-                    right_delta_rot6d,
-                    right_grip[1:, None]
-                ], axis=-1)
+                    action_seq = np.concatenate([
+                        left_delta_xyz,
+                        left_delta_rot6d,
+                        left_grip[1:, None],
+                        right_delta_xyz,
+                        right_delta_rot6d,
+                        right_grip[1:, None]
+                    ], axis=-1)
+            if data_type == 'abs':
+                if control == 'qpos':
+                    left_joint = data["joint_action/left_arm"][()]      # (T, 7)
+                    right_joint = data["joint_action/right_arm"][()]    # (T, 7)
+                    left_grip = data["joint_action/left_gripper"][()]   # (T,)
+                    right_grip = data["joint_action/right_gripper"][()] # (T,)
+                    action_seq = np.concatenate([
+                        left_joint,
+                        left_grip[:, None],
+                        right_joint,
+                        right_grip[:, None]
+                    ], axis=-1)
+                else:
+                    left_ee = data["endpose/left_endpose"][()]
+                    right_ee = data["endpose/right_endpose"][()]
+                    left_grip = data["endpose/left_gripper"][()]
+                    right_grip = data["endpose/right_gripper"][()]
+                    action_seq = np.concatenate([
+                        left_ee[:, :3],
+                        quat_to_rotate6D(left_ee[:, 3:]),
+                        left_grip[:, None],
+                        right_ee[:, :3],
+                        quat_to_rotate6D(right_ee[:, 3:]),  
+                        right_grip[:, None]
+                    ], axis=-1)
 
             all_data.append(action_seq)
 
@@ -174,9 +194,15 @@ def main(args):
         if 'rel' in args.wandb_name or args.model_type == 'discrete':
             hdf5_files = get_hdf5s(args.train_metas_path)
             print('len(hdf5_files)', len(hdf5_files))
-            stats_file = args.train_metas_path.replace(".jsonl", "_global_stats.npz")
+            if 'rel' in args.wandb_name:
+                data_type = 'rel'
+            elif args.model_type == 'discrete':
+                data_type = 'abs'
+            stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
             print('Saving stats_file', args.train_metas_path, stats_file)
-            mean, std, min_val, max_val = compute_mean_std(hdf5_files, control=control)
+            print('Processing stats for', args.model_type, data_type, control)
+            mean, std, min_val, max_val = compute_mean_std(hdf5_files, control=control, data_type=data_type) 
+            # if data_type is abs, then model type must be discrete for us to ever need this function
             np.savez(stats_file, mean=mean, std=std, min=min_val, max=max_val)
     
     train_dataloader = iter(create_dataloader(

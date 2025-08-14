@@ -88,6 +88,7 @@ class BaseModel(nn.Module):
         self.num_action_chunk = num_action_chunk
         self.dim_actions = dim_actions
         self.num_bins = num_bins
+        print('Number of num_bins', num_bins)
         assert model_type in ['continuous', 'discrete', 'flow-matching']
         self.vision_backbone = create_model(vision_backbone, pretrained=True)
         del self.vision_backbone.fc
@@ -163,6 +164,7 @@ def model_abs_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -179,6 +181,7 @@ def model_abs_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -195,6 +198,7 @@ def model_rel_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 1,
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -211,6 +215,7 @@ def model_rel_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 1,
+        num_bins = 1
     )
     return model, language_encoder()
 

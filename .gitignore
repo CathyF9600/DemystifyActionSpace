@@ -12,3 +12,4 @@ wandb/
 *.ipynb
 last_checkpoint/*
 HFP_Training/
+*.npz
