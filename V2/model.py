@@ -96,7 +96,7 @@ class BaseModel(nn.Module):
             assert num_bins == 1, "num_bins must be 1 for continuous models"
         self.num_bins = num_bins
         assert model_type in ['continuous', 'discrete', 'flow-matching']
-        self.vision_backbone = create_model(vision_backbone, pretrained=True)
+        self.vision_backbone = create_model(vision_backbone, pretrained=False)
         del self.vision_backbone.fc
         self.decoder = MlpDecoder(
                                     depth = 3,
@@ -272,7 +272,7 @@ def model_rel_ee_dis(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
-        action_scale = 100,
+        action_scale = 1,
         num_bins = 256
     )
     return model, language_encoder()
@@ -289,7 +289,7 @@ def model_rel_qpos_dis(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
-        action_scale = 100,
+        action_scale = 1,
         num_bins = 256
     )
     return model, language_encoder()
