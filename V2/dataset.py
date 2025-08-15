@@ -69,17 +69,22 @@ class InfiniteDataReader(IterableDataset):
         self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
         print('metas_path', metas_path)
         if 'rel' in metas_path or self.discretize:
-            stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats.npz")
-            print('Loading relative mean and std from', stats_file)
+            if 'rel' in metas_path:
+                data_type = 'rel'
+            else:
+                data_type = 'abs'
+            stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats_" + data_type + ".npz")
+            print('Loading mean and std from', stats_file)
             stats = np.load(stats_file)
             self.global_mean = np.asarray(stats["mean"])
             self.global_std = np.asarray(stats["std"])
             self.global_min = np.asarray(stats["min"])
             self.global_max = np.asarray(stats["max"])
             
-    def quantize_action(self, action):
+    def quantize_action(self, action, rel=False):
         # Normalize to [0, 1] using precomputed global min/max
-        action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
+        if rel == False: # normalize once
+            action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
         action = np.clip(action, 0, 1)
         return (action * (self.num_bins - 1)).astype(np.int64)
 
@@ -87,7 +92,7 @@ class InfiniteDataReader(IterableDataset):
         meta = self.metas[dataset_name]
         datapath = meta['datalist'][idx]
         if not isinstance(datapath, str): datapath = datapath[0]
- 
+        rel = False
         with h5py.File(datapath, "r") as data:
             images = [data[key] for key in meta['observation_key']] 
             if dataset_name == 'robotwin2_abs_ee':
@@ -106,7 +111,7 @@ class InfiniteDataReader(IterableDataset):
                 ], axis=-1)
                 action_seq = prorpio_seq[1:]
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-
+                # print('action_seq', action_seq[:10])
             elif dataset_name == 'robotwin2_abs_qpos': # 14
                 freq = self.num_actions  # adjust if needed
                 left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
@@ -148,6 +153,7 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[1:, None]
                 ], axis=-1)
                 action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                rel = True
                 index_list = list(range(0, action_seq.shape[0] - freq))
             elif dataset_name == 'robotwin2_rel_qpos':
                 freq = self.num_actions  # adjust if needed
@@ -168,6 +174,7 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[1:, None]
                 ], axis=-1)
                 action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                rel = True
                 index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
             else: raise NotImplementedError
             
@@ -178,9 +185,10 @@ class InfiniteDataReader(IterableDataset):
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
                 if self.discretize:
-                    action = self.quantize_action(action)
-                    action_tensor = torch.tensor(action, dtype=torch.long)
-                    # print('action_tensor', action_tensor)
+                    # print('original action', action[:10])
+                    q_action = self.quantize_action(action, rel=rel)
+                    action_tensor = torch.tensor(q_action, dtype=torch.long)
+                    # print('quantized action', q_action[:10])
                 else:
                     action_tensor = torch.tensor(action, dtype=torch.float32)
 
