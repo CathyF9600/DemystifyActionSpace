@@ -81,9 +81,10 @@ class InfiniteDataReader(IterableDataset):
             self.global_min = np.asarray(stats["min"])
             self.global_max = np.asarray(stats["max"])
             
-    def quantize_action(self, action):
+    def quantize_action(self, action, rel=False):
         # Normalize to [0, 1] using precomputed global min/max
-        action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
+        if rel == False: # normalize once
+            action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
         action = np.clip(action, 0, 1)
         return (action * (self.num_bins - 1)).astype(np.int64)
 
@@ -91,7 +92,7 @@ class InfiniteDataReader(IterableDataset):
         meta = self.metas[dataset_name]
         datapath = meta['datalist'][idx]
         if not isinstance(datapath, str): datapath = datapath[0]
- 
+        rel = False
         with h5py.File(datapath, "r") as data:
             images = [data[key] for key in meta['observation_key']] 
             if dataset_name == 'robotwin2_abs_ee':
@@ -152,6 +153,7 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[1:, None]
                 ], axis=-1)
                 action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                rel = True
                 index_list = list(range(0, action_seq.shape[0] - freq))
             elif dataset_name == 'robotwin2_rel_qpos':
                 freq = self.num_actions  # adjust if needed
@@ -172,6 +174,7 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[1:, None]
                 ], axis=-1)
                 action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                rel = True
                 index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
             else: raise NotImplementedError
             
@@ -183,7 +186,7 @@ class InfiniteDataReader(IterableDataset):
                 action = action_seq[idx:idx+self.num_actions]
                 if self.discretize:
                     # print('original action', action[:10])
-                    q_action = self.quantize_action(action)
+                    q_action = self.quantize_action(action, rel=rel)
                     action_tensor = torch.tensor(q_action, dtype=torch.long)
                     # print('quantized action', q_action[:10])
                 else:
