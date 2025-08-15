@@ -13,4 +13,5 @@ wandb/
 last_checkpoint/*
 HFP_Training/
 *.mp4
-/eval/*
+eval/
+
