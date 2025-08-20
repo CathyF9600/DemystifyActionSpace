@@ -154,8 +154,6 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel'):
     print('max:', max_val)
     print('p5:', p5)
     print('p95:', p95)
-
-
     return mean, std, min_val, max_val, p5, p95
 
 

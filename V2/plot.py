@@ -6,14 +6,42 @@ import h5py
 from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
 
+def rot6_to_matrix(rot6):
+    """
+    rot6: shape (..., 6)
+    return: rotation matrix (..., 3, 3)
+    """
+    a1 = rot6[..., 0:3]
+    a2 = rot6[..., 3:6]
+
+    # Gram-Schmidt 正交化
+    b1 = a1 / np.linalg.norm(a1, axis=-1, keepdims=True)
+    b2 = a2 - np.sum(b1 * a2, axis=-1, keepdims=True) * b1
+    b2 = b2 / np.linalg.norm(b2, axis=-1, keepdims=True)
+    b3 = np.cross(b1, b2)
+
+    return np.stack([b1, b2, b3], axis=-1)  # (..., 3, 3)
+
+def rot6_to_euler(rot6, seq="xyz"):
+    Rmat = rot6_to_matrix(rot6)
+    r = R.from_matrix(Rmat)
+    ret= np.squeeze(r.as_euler(seq, degrees=True))  # (..., 3)
+    print('ret', ret.shape)
+    return ret
 
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
     return R.from_quat(q).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
 
 
-def norm(action, global_min, global_max):
+def minmax_normalize(action, global_min, global_max):
     action = (action - global_min[None, :]) / (global_max[None, :] - global_min[None, :] + 1e-8)
     action = np.clip(action, 0, 1)
+    return action
+
+def meanstd_normalize(action, global_mean, global_std):
+    # action = (action - global_min[None, :]) / (global_max[None, :] - global_min[None, :] + 1e-8)
+    action = (action - global_mean[None, :]) / (global_std[None, :] + 1e-8)
+    # action = np.clip(action, 0, 1)
     return action
 
 
@@ -81,6 +109,12 @@ def plot_pca(actions, save_path, pca_dim=2):
     print(f"Saved PCA plot to {save_path}")
 
 
+def cal_delta_rotate(q1, q2):
+    q1 = R.from_quat(q1)
+    q2 = R.from_quat(q2)
+    del_rotate = q1 * q2.inv()
+    return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
+
 
 def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_actions=10, model_type="continuous", num_bins=256, normalize=True):
     """
@@ -107,7 +141,8 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
     rot6_all = []
 
     if normalize:
-        print('min max normalizing')
+        # print('min max normalizing')
+        print('min', global_min, 'max', global_max)
     for datapath in datalist:
         if not isinstance(datapath, str):
             datapath = datapath[0]
@@ -128,7 +163,7 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                 ], axis=-1)
                 left_xyz = left_ee[:, :3]
                 right_xyz = right_ee[:, :3]
-                if normalize: proprio = norm(proprio, global_min, global_max)
+                if normalize: proprio = minmax_normalize(proprio, global_min, global_max)
 
             elif dataset_name == "robotwin2_abs_qpos":
                 left_joint = data["joint_action/left_arm"][()]
@@ -141,7 +176,7 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                     right_joint,
                     right_grip[:, None]
                 ], axis=-1)
-                if normalize: proprio = norm(proprio, global_min, global_max)
+                if normalize: proprio = minmax_normalize(proprio, global_min, global_max)
 
             elif dataset_name == 'robotwin2_rel_ee':
                 left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
@@ -169,6 +204,10 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                     right_grip[1:, None]
                 ], axis=-1)
                 proprio = ee_diff
+                if normalize:     
+                    # proprio = meanstd_normalize(proprio, global_min, global_max)
+                    proprio = meanstd_normalize(proprio, global_mean, global_std)
+
             elif dataset_name == 'robotwin2_rel_qpos':
                 left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
@@ -191,6 +230,10 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                 # else:
                 #     action_seq = joint_diff
                 proprio = joint_diff
+                if normalize: 
+                    # proprio = meanstd_normalize(proprio, global_min, global_max)
+                    proprio = meanstd_normalize(proprio, global_mean, global_std)
+
             else:
                 raise NotImplementedError(f"Dataset type {dataset_name} not handled yet")
             action_seq = proprio[1:]
@@ -198,7 +241,12 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
             collected.append(action_seq)
     collected = np.concatenate(collected, axis=0)  # (N, 3)
     # rot6_all = np.concatenate(rot6_all, axis=0)  # (N, 6)
+    # Suppose arr is your array of shape (N, 14)
+    mins = collected.min(axis=0)  # shape (14,)
+    maxs = collected.max(axis=0)  # shape (14,)
 
+    print("Min values per feature:", mins)
+    print("Max values per feature:", maxs)
     return collected
 
 
@@ -291,28 +339,86 @@ def plot_rot6_on_sphere(rot6, save_dir):
         plt.close()
         print(f"Saved rot6 sphere plot to {save_path}")
 
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
+
+def plot_qpos_eef_correspondence(qpos, ee, save_path=None):
+    """
+    qpos_all: (N, D1)
+    eef_all: (N, D2)
+    save_path: optional, where to save the figure
+    """
+    # print('qpos_all', qpos_all.shape, eef_all.shape)
+
+    N = qpos.shape[0]
+    print('N', N)
+    # 拼在一起做 PCA，保证投影空间一致
+    combined = np.concatenate([qpos, ee], axis=0)  # 按行拼接，shape为(2N, max(D1,D2))
+    pca = PCA(n_components=2)
+    pca.fit(combined)  # 用所有数据拟合PCA模型
+    
+    # 使用同一个PCA模型分别转换qpos和ee
+    qpos_2d = pca.transform(qpos)  # (N, 2)
+    ee_2d = pca.transform(ee)      # (N, 2)
+    print('qpos_2d.shape', qpos_2d.shape, ee_2d.shape)
+    # 画散点
+    plt.figure(figsize=(6,6))
+    plt.scatter(qpos_2d[:,0], qpos_2d[:,1], s=5, c='blue', alpha=0.5, label="qpos")
+    plt.scatter(ee_2d[:,0], ee_2d[:,1], s=5, c='red', alpha=0.5, label="ee")
+
+    # 连线（连接对应的数据点）
+    for i in range(len(qpos)):
+        plt.plot([qpos_2d[i,0], ee_2d[i,0]], [qpos_2d[i,1], ee_2d[i,1]], 
+                 c='gray', linewidth=0.5, alpha=0.3)
+
+    plt.legend()
+    plt.title("Correspondence between qpos and ee")
+    plt.savefig(save_path, dpi=300)
+    plt.close()
+    print(f"Saved correspondence plot to {save_path}")
 
 
+
+name = 'rel_ee'
 # Example usage
 stats_file = None
-metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/abs_ee_single_camera-50-10.jsonl"
+metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
 save_folder = "distributions"
-stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/abs_ee_single_camera-50-10_global_stats_abs.npz"
-collected = collect_all_actions(metas_path, stats_file)
+stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_rel.npz"
+print('stats_file', stats_file)
+eef_all = collect_all_actions(metas_path, stats_file)
+print('eef_all[:, :3]', eef_all[:, :3].shape)
+eef_euler = np.concatenate([
+    eef_all[:, :3],
+    rot6_to_euler(eef_all[:, 3:9]),                        # (T,7)
+    eef_all[:, 10][:, None],             # (T,1)
+    eef_all[:, 10:13],
+    rot6_to_euler(eef_all[:, 13:19]),                       # (T,7)
+    eef_all[:, 19][:, None]           # (T,1)
+], axis=-1)
+name = 'rel_qpos'
+# Example usage
+stats_file = None
+metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
+save_folder = "distributions"
+stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_rel.npz"
+print('stats_file', stats_file)
+qpos_all = collect_all_actions(metas_path, stats_file)
+
+plot_qpos_eef_correspondence(qpos_all, eef_euler, save_path=save_folder + "/qpos_eef_correspondence.png")
+
+
+
 file_name = metas_path.split('/')[-1].split('.')[0] + '.png'
 print(file_name)
 # plot_action_dim_distributions(collected, os.path.join(save_folder, file_name))
 # plot_tsne(collected, save_folder)
 
 
-save_folder = "tsne_results"
-os.makedirs(save_folder, exist_ok=True)
-save_path = os.path.join(save_folder, "tsne_"+file_name)
-
-plot_tsne(collected, save_path, perplexity=30, max_iter=1000)
-
-# Save 3D scatter for xyz
-# plot_xyz_distribution(xyz_all, os.path.join(save_folder, "xyz_distribution.png"))
-
-# Save sphere plots for rot6
-# plot_rot6_on_sphere(rot6_all, save_folder)
+# save_folder = "tsne_results"
+# os.makedirs(save_folder, exist_ok=True)
+# save_path = os.path.join(save_folder, "tsne_"+file_name)
+# plot_tsne(collected, save_path, perplexity=30, max_iter=1000)
+# save_path = os.path.join(save_folder, "pca_"+file_name)
+# plot_pca(collected, save_path)
