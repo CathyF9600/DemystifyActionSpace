@@ -15,3 +15,5 @@ HFP_Training/
 *.mp4
 /eval/*
 *.npz
+V2/distributions/
+V2/tsne_results/

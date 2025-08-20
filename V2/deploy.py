@@ -22,6 +22,7 @@ from torchvision import transforms
 from torchvision.transforms import InterpolationMode
 import glob
 from scipy.spatial.transform import Rotation as R
+
 def rotate6D_to_R(v6: np.ndarray) -> np.ndarray:
     v6 = np.asarray(v6)
     if v6.shape[-1] != 6:
@@ -35,8 +36,6 @@ def rotate6D_to_R(v6: np.ndarray) -> np.ndarray:
     b3 = np.cross(b1, b2)
     rot_mats = np.stack((b1, b2, b3), axis=-1)      # shape (..., 3, 3)
     return R.from_matrix(rot_mats)
-
-
 
 class DeployModel:
     def __init__(self, 
