@@ -143,7 +143,7 @@ class BaseModel(nn.Module):
         self.num_bins = num_bins
         print('Number of num_bins', num_bins)
         assert model_type in ['continuous', 'discrete', 'flow-matching']
-        self.vision_backbone = create_model(vision_backbone, pretrained=True)
+        self.vision_backbone = create_model(vision_backbone, pretrained=False)
         del self.vision_backbone.fc
         self.decoder = MlpDecoder(
                                     model_type = model_type,
@@ -203,7 +203,8 @@ class BaseModel(nn.Module):
     def pred_action(self,
                 images: torch.Tensor, # B V C H W
                 encoded_language: torch.Tensor, # B C
-                proprio: torch.Tensor
+                proprio: torch.Tensor,
+                steps = 5
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
