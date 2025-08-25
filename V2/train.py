@@ -126,6 +126,7 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel'):
                         right_grip[:, None]
                     ], axis=-1)
                 else:
+                    # action_seq = data['observations/eef_6d'][()] # 实机
                     left_ee = data["endpose/left_endpose"][()]
                     right_ee = data["endpose/right_endpose"][()]
                     left_grip = data["endpose/left_gripper"][()]
@@ -140,7 +141,7 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel'):
                     ], axis=-1)
 
             all_data.append(action_seq)
-
+    # print('all_data', all_data)
     stacked = np.concatenate(all_data, axis=0)
     mean = stacked.mean(axis=0)
     std = stacked.std(axis=0)
@@ -193,19 +194,19 @@ def main(args):
             control = 'ee'
         else:
             control = 'qpos'
-        if 'rel' in args.wandb_name or args.model_type == 'discrete':
-            hdf5_files = get_hdf5s(args.train_metas_path)
-            print('len(hdf5_files)', len(hdf5_files))
-            if 'rel' in args.wandb_name:
-                data_type = 'rel'
-            elif args.model_type == 'discrete':
-                data_type = 'abs'
-            stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
-            print('Saving stats_file', args.train_metas_path, stats_file)
-            print('Processing stats for', args.model_type, data_type, control)
-            mean, std, min_val, max_val, p5, p95 = compute_mean_std(hdf5_files, control=control, data_type=data_type) 
-            # if data_type is abs, then model type must be discrete for us to ever need this function
-            np.savez(stats_file, mean=mean, std=std, min=min_val, max=max_val, p5=p5, p95=p95)
+        # if 'rel' in args.wandb_name or args.model_type == 'discrete':
+        hdf5_files = get_hdf5s(args.train_metas_path)
+        print('len(hdf5_files)', len(hdf5_files))
+        if 'rel' in args.wandb_name:
+            data_type = 'rel'
+        else:
+            data_type = 'abs'
+        stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
+        print('Saving stats_file', args.train_metas_path, stats_file)
+        print('Processing stats for', args.model_type, data_type, control)
+        mean, std, min_val, max_val, p5, p95 = compute_mean_std(hdf5_files, control=control, data_type=data_type) 
+        # if data_type is abs, then model type must be discrete for us to ever need this function
+        np.savez(stats_file, mean=mean, std=std, min=min_val, max=max_val, p5=p5, p95=p95)
     
     train_dataloader = iter(create_dataloader(
         rank = args.rank,

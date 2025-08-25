@@ -68,7 +68,11 @@ class DeployModel:
             print('stats_path is empty')
     # def dequantize_action():
 
-    
+    def abs_recon(self, action_seq):
+        # de-normalize 
+        action_unnorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        return action_unnorm
+
     def rel_recon(self, action_seq, proprio_start):
         # de-normalize 
         diff_denorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
@@ -121,24 +125,31 @@ class DeployModel:
         try:  
             self.model.eval()
             image_list = []        
-            if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"])))
+            if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"]).astype(np.uint8)))
             language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsqueeze(0)
+            
+            # raw_bytes = base64.b64decode(payload["image0"])
+            # img = Image.open(io.BytesIO(raw_bytes))
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
+
             proprio = np.array(json_numpy.loads(payload['proprio']))
             # save lang
             # print("language:", payload['language_instruction'])
             # print('current proprio', proprio)
             # print("payload['data_type']", payload['data_type'])
 
+            # norm proprio
+            # proprio_norm = (propio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+
             inputs = {
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
             }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
-                # print('action', action)
+                print('action', action)
                 if 'data_type' in payload.keys():
                     if payload['data_type'] == 'rel':
                         # print('action', action.shape)
@@ -154,6 +165,8 @@ class DeployModel:
                             }
                         )
                     else:
+                        print('abs action', action.shape)
+                        # action_unnorm = self.abs_recon(action)
                         return JSONResponse(
                             {'action': action.tolist(), }
                         )

@@ -17,3 +17,4 @@ HFP_Training/
 *.npz
 V2/distributions/
 V2/tsne_results/
+*.png
