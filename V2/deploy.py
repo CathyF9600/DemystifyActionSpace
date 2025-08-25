@@ -67,26 +67,65 @@ class DeployModel:
             try:
                 self.global_min = np.asarray(stats['min'])
                 self.global_max = np.asarray(stats['max'])
+                print('global_min', self.global_mean)
+                print('global_max', self.global_std)
             except Exception as e:  
                 print('Error Loading stats', e)
-        except Exception as e:  
+            try:
+                self.p5 = np.asarray(stats['p5'])
+                self.p95 = np.asarray(stats['p95'])
+                print('p5', self.p5)
+                print('p95', self.p95)
+            except Exception as e:  
+                print('no p5 p95:', e)
+        except Exception as e:
             print('Error Loading stats', e)
             self.global_mean = None
             self.global_std = None
             self.global_min = None
             self.global_max = None
+
         self.num_bins = num_bins
 
     def dequantize_action(self, quantized_action):
         quantized_action = np.asarray(quantized_action.cpu(), dtype=np.float32)
-        step = (self.global_max - self.global_min) / (self.num_bins - 1)
-        action = self.global_min + step * quantized_action
+        try:
+            print('normalize with p5 p95')            
+            step = (self.p95 - self.p5) / (self.num_bins - 1)
+            action = self.p5 + step * quantized_action
+        except:
+            print('no p5 p95')            
+            step = (self.global_max - self.global_min) / (self.num_bins - 1)
+            action = self.global_min + step * quantized_action
         # print('dequantized action:', action)
         return action
 
-    def rel_recon(self, action_seq, proprio_start):
+    def proprio_norm(self, proprio):
+        r = (proprio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+        # print('proprio', proprio.shape) (14,) or (20,)
+        return r.reshape(proprio.shape[0],)
+
+    def abs_recon(self, action_seq, proprio_start, discrete=False):
+        print('un-normalizing for absoluate')
+        if not discrete: # we don't do mean std normalize for discrete
+            try:
+                abs_denorm = action_seq * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+            except:
+                abs_denorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        else:
+            abs_denorm = action_seq
+        return abs_denorm
+
+    def rel_recon(self, action_seq, proprio_start, discrete=False):
         print('proprio_start', proprio_start.shape)
-        diff_denorm = action_seq * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        if not discrete: # we don't do mean std normalize for discrete
+            try:
+                diff_denorm = action_seq * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+            except:
+                diff_denorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        else:
+            diff_denorm = action_seq
+            print('Skipping mean std normalization since its discrete')
         if proprio_start.shape[-1] == 20:
             print('Processing relative ee')
             # de-normalize 
@@ -151,39 +190,49 @@ class DeployModel:
             language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsqueeze(0)
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
             proprio = np.array(json_numpy.loads(payload['proprio']))
+            proprio_normed = self.proprio_norm(proprio)
             # save lang
-            # print("language:", payload['language_instruction'])
+            print("proprio_normed:", proprio_normed.shape, proprio.shape)
             # print('current proprio', proprio)
             # print("payload['data_type']", payload['data_type'])
 
             inputs = {
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
             }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
                 # print('action', action)
+                discrete = False
                 if 'dis' in self.model_name:
-                        action = self.dequantize_action(action)
+                        action = self.dequantize_action(action) # contain min max normalization (0, 1)
+                        discrete = True
                 if 'data_type' in payload.keys():
                     if payload['data_type'] == 'rel':
                         # print('action', action.shape)
                         # print('proprio', proprio.shape)
-                        action_sum = self.rel_recon(action, proprio[None, :])
+                        action_sum = self.rel_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
                         # print('action_sum', action_sum)
                         return JSONResponse(
                             {
                                 'action': action.tolist(), 
-                                'action_sum': action_sum.tolist(),
+                                'action_unnorm': action_sum.tolist(),
                                 'global_mean': self.global_mean.tolist(),
                                 'global_std': self.global_std.tolist()
                             }
                         )
-                    else:
+                    else: # we do mean std un-normalization for abs
+                        action_unnorm = self.abs_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
+                        # print('action_sum', action_sum)
                         return JSONResponse(
-                            {'action': action.tolist(), }
+                            {
+                                'action': action_unnorm.tolist(), 
+                                'action_sum': action_unnorm.tolist(),
+                                'global_mean': self.global_mean.tolist(),
+                                'global_std': self.global_std.tolist()
+                            }
                         )
         
         except:  # noqa: E722
@@ -223,6 +272,7 @@ def main():
     stats_path = None
     try:
         stats_paths = glob.glob(os.path.join(args.stats_path, "*.npz"))
+        print('Availbale stats_paths:', stats_paths)
         for p in stats_paths:
             if 'ee' in args.model_name and 'ee' in p:
                 if ('abs' in args.model_name and 'abs' in p) or \
@@ -237,6 +287,7 @@ def main():
                 
     except:
         stats_path = None
+    print('FOUND stats_path:', stats_path)
     server = DeployModel(
         ckpt_path = ckpt_path,
         model_name = args.model_name,

@@ -13,10 +13,5 @@ wandb/
 last_checkpoint/*
 HFP_Training/
 *.mp4
-<<<<<<< HEAD
-eval/
-
-=======
 /eval/*
 *.npz
->>>>>>> adb33dc797152f2fdae1f29ff29bcf7218c417e5

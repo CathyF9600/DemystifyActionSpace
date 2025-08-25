@@ -10,7 +10,7 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/dis_abs_qpos-75w
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/dis_abs_qpos-100w
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type abs \

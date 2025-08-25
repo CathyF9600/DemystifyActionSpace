@@ -202,7 +202,8 @@ class BaseModel(nn.Module):
     def pred_action(self,
                 images: torch.Tensor, # B V C H W
                 encoded_language: torch.Tensor, # B C
-                proprio: torch.Tensor
+                proprio: torch.Tensor,
+                steps = 5
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape

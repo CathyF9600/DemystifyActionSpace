@@ -1,5 +1,5 @@
 #!/bin/bash
-port=18895
+port=18876
 export CUDA_VISIBLE_DEVICES=0
 export WANDB_BASE_URL=https://api.bandw.top
 export PYTHONPATH=$PWD:$PYTHONPATH
@@ -10,10 +10,10 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt_rel_ee-75w
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/flow_abs_ee-100w
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
-    --data_type rel \
+    --data_type abs \
     --action_type ee \
     --host 0.0.0.0 \
     --port $port \

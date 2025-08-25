@@ -1,0 +1,17 @@
+{"sim/adjust_bottle": 70.0}
+{"sim/dump_bin_bigbin": 60.0}
+{"sim/grab_roller": 70.0}
+{"sim/lift_pot": 50.0}
+{"sim/move_playingcard_away": 20.0}
+{"sim/open_laptop": 60.0}
+{"sim/place_burger_fries": 70.0}
+{"sim/adjust_bottle": 70.0}
+{"sim/dump_bin_bigbin": 70.0}
+{"sim/grab_roller": 80.0}
+{"sim/lift_pot": 50.0}
+{"sim/move_playingcard_away": 10.0}
+{"sim/open_laptop": 60.0}
+{"sim/place_burger_fries": 40.0}
+{"sim/place_container_plate": 70.0}
+{"sim/press_stapler": 40.0}
+{"sim/shake_bottle_horizontally": 80.0}
