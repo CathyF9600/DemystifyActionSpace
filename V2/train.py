@@ -146,13 +146,15 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel'):
     std = stacked.std(axis=0)
     min_val = stacked.min(axis=0)
     max_val = stacked.max(axis=0)
-
+    p5 = np.percentile(stacked, 5, axis=0)
+    p95 = np.percentile(stacked, 95, axis=0)
     print('mean:', mean)
     print('std:', std)
     print('min:', min_val)
     print('max:', max_val)
-
-    return mean, std, min_val, max_val
+    print('p5:', p5)
+    print('p95:', p95)
+    return mean, std, min_val, max_val, p5, p95
 
 
 def get_hdf5s(metas_path):
@@ -201,9 +203,9 @@ def main(args):
             stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
             print('Saving stats_file', args.train_metas_path, stats_file)
             print('Processing stats for', args.model_type, data_type, control)
-            mean, std, min_val, max_val = compute_mean_std(hdf5_files, control=control, data_type=data_type) 
+            mean, std, min_val, max_val, p5, p95 = compute_mean_std(hdf5_files, control=control, data_type=data_type) 
             # if data_type is abs, then model type must be discrete for us to ever need this function
-            np.savez(stats_file, mean=mean, std=std, min=min_val, max=max_val)
+            np.savez(stats_file, mean=mean, std=std, min=min_val, max=max_val, p5=p5, p95=p95)
     
     train_dataloader = iter(create_dataloader(
         rank = args.rank,

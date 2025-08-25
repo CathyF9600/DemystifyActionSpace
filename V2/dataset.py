@@ -80,12 +80,26 @@ class InfiniteDataReader(IterableDataset):
             self.global_std = np.asarray(stats["std"])
             self.global_min = np.asarray(stats["min"])
             self.global_max = np.asarray(stats["max"])
-            
-    def quantize_action(self, action, rel=False):
+            self.p5 = np.asarray(stats["p5"])
+            self.p95 = np.asarray(stats["p95"])
+
+    def quantize_action(self, action):
         # Normalize to [0, 1] using precomputed global min/max
-        if rel == False: # normalize once
-            action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
+        # print('Normalizing in quantize_action...')
+        action = (action - self.global_min[None, :]) / (self.global_max[None, :] - self.global_min[None, :] + 1e-8)
         action = np.clip(action, 0, 1)
+        return (action * (self.num_bins - 1)).astype(np.int64)
+
+    def quantize_action_p(self, action):
+        """
+        Normalize to [0,1] using 5th percentile as min and 95th percentile as max,
+        then quantize into bins.
+        """
+        # print('Normalizing in quantize_action with p5 p95...')
+        # normalize with percentile range
+        action = (action - self.p5[None, :]) / (self.p95[None, :] - self.p5[None, :] + 1e-8)
+        action = np.clip(action, 0, 1)
+
         return (action * (self.num_bins - 1)).astype(np.int64)
 
     def read_hdf5(self, dataset_name, idx):
@@ -152,8 +166,10 @@ class InfiniteDataReader(IterableDataset):
                     right_delta_rot6d,
                     right_grip[1:, None]
                 ], axis=-1)
-                action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                rel = True
+                if not self.discretize: # only do min max normalization (later) for discrete model
+                    action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                else:
+                    action_seq = ee_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))
             elif dataset_name == 'robotwin2_rel_qpos':
                 freq = self.num_actions  # adjust if needed
@@ -173,8 +189,10 @@ class InfiniteDataReader(IterableDataset):
                     right_joint[1:] - right_joint[:-1],
                     right_grip[1:, None]
                 ], axis=-1)
-                action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                rel = True
+                if not self.discretize:
+                    action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                else:
+                    action_seq = joint_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
             else: raise NotImplementedError
             
@@ -185,10 +203,10 @@ class InfiniteDataReader(IterableDataset):
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
                 if self.discretize:
-                    # print('original action', action[:10])
-                    q_action = self.quantize_action(action, rel=rel)
+                    # print('original action', action[:5])
+                    q_action = self.quantize_action_p(action)
                     action_tensor = torch.tensor(q_action, dtype=torch.long)
-                    # print('quantized action', q_action[:10])
+                    # print('quantized action', q_action[:5])
                 else:
                     action_tensor = torch.tensor(action, dtype=torch.float32)
 

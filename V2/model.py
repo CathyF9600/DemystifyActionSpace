@@ -135,6 +135,7 @@ class BaseModel(nn.Module):
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
         self.dim_actions = dim_actions
+        print('num_bins:', num_bins)
         if model_type == 'discrete':
             assert num_bins > 0, "num_bins must be greater than 0 for discrete models"
         else:
