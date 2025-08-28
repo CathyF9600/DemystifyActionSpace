@@ -4,8 +4,8 @@ export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path=/data/empirical/cnt/rel-qpos-100w
-ckpt_path=/data/empirical/cnt-100/rel_qpos
-stats_path=/data/empirical/cnt-100
+ckpt_path=/data/empirical/cnt-50/rel_qpos_40t
+stats_path=/data/empirical/cnt-50/rel_qpos_40t
 model_name='model_rel_qpos_cnt'
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
@@ -25,7 +25,7 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-100/rel_qpos
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/rel_qpos_40t
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type rel \

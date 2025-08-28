@@ -1,17 +1,16 @@
 #!/bin/bash
 port=18890
-export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
+export CUDA_VISIBLE_DEVICES=1 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
-ckpt_path=/data/empirical/cnt-100/rel_ee
-stats_path=/data/empirical/cnt-100
+ckpt_path=/data/empirical/cnt-50/rel_ee_40t
+stats_path=/data/empirical/cnt-50/rel_ee_40t
 model_name='model_rel_ee_cnt'
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
-# env > script_env_bug.txt
 python deploy.py \
     --ckpt_path $ckpt_path \
     --stats_path $stats_path \
@@ -26,7 +25,7 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-100/rel_ee
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/rel_ee_40t
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type rel \
@@ -40,7 +39,7 @@ python script/robotwin_client_v2.py \
     --task_name all \
     --output_path $eval_log_dir \
     --task_config demo_randomized \
-    --instruction_type seen \
+    --instruction_type seen 
     # --hdf5_path /home/dodo/fyc/RoboTwin/data/adjust_bottle/demo_randomized/data/episode0.hdf5
     #> $eval_log_dir/log.txt 2>&1
 

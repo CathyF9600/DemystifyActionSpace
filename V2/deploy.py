@@ -218,7 +218,7 @@ class DeployModel:
                         return JSONResponse(
                             {
                                 'action': action.tolist(), 
-                                'action_unnorm': action_sum.tolist(),
+                                'action_sum': action_sum.tolist(),
                                 'global_mean': self.global_mean.tolist(),
                                 'global_std': self.global_std.tolist()
                             }
@@ -228,8 +228,8 @@ class DeployModel:
                         # print('action_sum', action_sum)
                         return JSONResponse(
                             {
-                                'action': action_unnorm.tolist(), 
-                                'action_sum': action_unnorm.tolist(),
+                                'action': action.tolist(), 
+                                'action_unnorm': action_unnorm.tolist(),
                                 'global_mean': self.global_mean.tolist(),
                                 'global_std': self.global_std.tolist()
                             }

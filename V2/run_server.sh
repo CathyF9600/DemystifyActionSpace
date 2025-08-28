@@ -1,14 +1,13 @@
 #!/bin/bash
-port=18883
+port=18892
 export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
 # ckpt_path=/data/empirical/aug12/cnt_abs_ee/ckpt-75w
-ckpt_path=/data/empirical/cnt-50/abs_ee_20t
+ckpt_path=/data/empirical/cnt-50/abs_ee_40t
+stats_path=/data/empirical/cnt-50/abs_ee_40t
 model_name='model_abs_ee_cnt'
-
-stats_path=/data/empirical/cnt-50/abs_ee_20t
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
@@ -27,7 +26,7 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/abs_ee_20t
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/abs_ee_40t
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type abs \
