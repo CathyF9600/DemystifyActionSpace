@@ -5,6 +5,118 @@ import matplotlib.pyplot as plt
 import h5py
 from scipy.spatial.transform import Rotation as R
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401 unused import
+from scipy.stats import entropy, multivariate_normal
+from sklearn.linear_model import LinearRegression
+import matplotlib.pyplot as plt
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+from scipy.stats import entropy
+import argparse
+import json_numpy
+import requests
+import cv2
+from PIL import Image
+import base64
+
+
+def compute_per_dim_entropy(data, bins=30):
+    """Histogram-based entropy per dimension."""
+    entropies = []
+    for i in range(data.shape[1]):
+        hist, _ = np.histogram(data[:, i], bins=bins, density=True)
+        hist = hist[hist > 0]
+        entropies.append(entropy(hist))
+    return np.array(entropies)
+
+
+def plot_entropy_bar(ent_ee, ent_qpos, data_type: str, save_path="entropy_bar.png"):
+    """Sorted bar chart comparing per-dimension entropies for ee and qpos."""
+    dims = np.arange(1, len(ent_ee) + 1)
+
+    # Sort indices by EE entropy (descending)
+    sorted_idx = np.argsort(ent_ee)[::-1]
+    ent_ee_sorted = np.array(ent_ee)[sorted_idx]
+    sorted_idx = np.argsort(ent_qpos)[::-1]
+
+    ent_qpos_sorted = np.array(ent_qpos)[sorted_idx]
+    dims_sorted = dims[sorted_idx]
+
+    width = 0.35
+    x = np.arange(len(ent_ee))  # new sequential positions for sorted bars
+
+    plt.figure(figsize=(10, 5))
+    plt.bar(x - width/2, ent_ee_sorted, width, label="EE")
+    plt.bar(x + width/2, ent_qpos_sorted, width, label="Qpos")
+
+    plt.xticks(x, dims_sorted)  # tick labels = original dimension indices
+    plt.xlabel("Dimension (sorted by entropy)")
+    plt.ylabel("Entropy")
+    title = "Per-Dimension Entropy for " + data_type + " ee and qpos (Sorted)"
+    plt.title(title)
+    plt.legend()
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+    print(f"Saved bar chart to {save_path}")
+
+def plot_entropy_heatmap(ent_ee, ent_qpos, save_path="entropy_heatmap.png"):
+    """Heatmap visualization of entropy values, sorted by EE entropy."""
+    # Sort indices by EE entropy (descending)
+    sorted_idx = np.argsort(ent_ee)[::-1]
+    ent_ee_sorted = np.array(ent_ee)[sorted_idx]
+    sorted_idx = np.argsort(ent_qpos)[::-1]
+    ent_qpos_sorted = np.array(ent_qpos)[sorted_idx]
+
+    data = np.vstack([ent_ee_sorted, ent_qpos_sorted])
+    labels = ["EE", "Qpos"]
+
+    plt.figure(figsize=(12, 2))
+    sns.heatmap(
+        data,
+        annot=True, fmt=".2f", cmap="viridis", cbar=True,
+        xticklabels=sorted_idx + 1,  # original dimension indices (1-based)
+        yticklabels=labels
+    )
+    plt.xlabel("Dimension (sorted by EE entropy)")
+    plt.ylabel("Variable Set")
+    plt.title("Entropy Heatmap (Sorted)")
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=200)
+    plt.close()
+    print(f"Saved heatmap to {save_path}")
+
+
+def compute_entropy(data, bins=30):
+    """Compute entropy per dimension and joint entropy (histogram + Gaussian estimate)."""
+    data = np.asarray(data)
+    ent_per_dim = []
+    for i in range(data.shape[1]):
+        hist, _ = np.histogram(data[:, i], bins=bins, density=True)
+        hist = hist[hist > 0]
+        ent_per_dim.append(entropy(hist))
+
+    cov = np.cov(data.T)
+    d = data.shape[1]
+    det = np.linalg.det(cov)
+    if det <= 0:
+        gauss_entropy = np.nan
+    else:
+        gauss_entropy = 0.5 * np.log((2 * np.pi * np.e) ** d * det)
+
+    return ent_per_dim, gauss_entropy
+
+
+def decode_image_from_bytes(camera_rgb_image):
+    if isinstance(camera_rgb_image, (bytes, bytearray)): camera_rgb_image = np.frombuffer(camera_rgb_image, dtype=np.uint8)
+    rgb = cv2.imdecode(camera_rgb_image, cv2.IMREAD_COLOR)
+    if rgb is None: 
+        rgb = np.frombuffer(camera_rgb_image, dtype=np.uint8) 
+        if rgb.size == 2764800: 
+            rgb = rgb.reshape(720, 1280, 3) 
+        elif rgb.size == 921600: 
+            rgb = rgb.reshape(480, 640, 3)
+    return Image.fromarray(rgb)
 
 def rot6_to_matrix(rot6):
     """
@@ -116,11 +228,63 @@ def cal_delta_rotate(q1, q2):
     return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
 
 
-def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_actions=10, model_type="continuous", num_bins=256, normalize=True):
+def huber_loss(y_true, y_pred, delta=1.0):
+    error = y_true - y_pred
+    abs_error = np.abs(error)
+    quadratic = np.minimum(abs_error, delta)
+    linear = abs_error - quadratic
+    loss = 0.5 * quadratic**2 + delta * linear
+    return np.mean(loss, axis=(1, 2))  # average over horizon (10) and action dim (20)
+
+def plot_loss(loss):
+    return
+
+def get_loss(pred_actions, gt):
+    # input: action: (N-1, 10, 20), gt (N, 20) 
+    # get loss between actions[i-1, j, 0] and gt[i, :] (the prediction made by (i-1)th sequence's j-th action for j in [i, i+10]
+    # output: loss: dict - key: action (20,), value: loss (np.float)
+    N_minus_1, horizon, dim = pred_actions.shape
+
+    # build gt chunks, but truncate at the end
+    gt_chunks = np.zeros_like(pred_actions)  # placeholder
+    mask = np.zeros((N_minus_1, horizon), dtype=bool)
+
+    for i in range(N_minus_1):
+        end = min(N_minus_1+1, i+1+horizon)
+        gt_chunk = gt[i+1:end]
+        gt_chunks[i, :len(gt_chunk)] = gt_chunk
+        mask[i, :len(gt_chunk)] = True
+
+    # compute huber loss for all
+    losses_all = huber_loss_vectorized(pred_actions, gt_chunks, delta)  # (N-1,)
+
+    # mask out invalid positions by recomputing only where mask=True
+    losses = {}
+    for i in range(N_minus_1):
+        valid = mask[i]
+        if np.any(valid):
+            losses[i] = float(
+                huber_loss(
+                    pred_actions[i:i+1, valid],
+                    gt_chunks[i:i+1, valid],
+                    delta
+                )[0]
+            )
+        else:
+            losses[i] = None  # no valid gt
+    
+    return losses
+
+
+def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_actions=10, model_type="continuous", num_bins=256, normalize=True, compute_loss=False, args=None):
     """
     Collect all data from the dataset at once instead of using the dataloader.
     Returns a big numpy array of values for the given field.
     """
+    if compute_loss:
+        url = f"http://{args.host}:{args.port}/act"
+        print('url', url)
+
     # Load meta info
     with open(metas_path, "r") as f:
         meta = json.load(f)
@@ -139,16 +303,26 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
     collected = []
     xyz_all = []
     rot6_all = []
-
+    data_type = None
     if normalize:
         # print('min max normalizing')
         print('min', global_min, 'max', global_max)
     for datapath in datalist:
+        # get parent directory name
+        folder_name = os.path.basename(os.path.dirname(os.path.dirname(datapath)))
+        # replace underscores with spaces
+        task_name = folder_name.replace("_", " ")
+
+        print('task_name', task_name) 
+
         if not isinstance(datapath, str):
             datapath = datapath[0]
 
         with h5py.File(datapath, "r") as data:
+            images = data['observation/head_camera/rgb'][()] 
+
             if dataset_name == "robotwin2_abs_ee":
+                data_type = "abs"
                 left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
@@ -163,9 +337,10 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                 ], axis=-1)
                 left_xyz = left_ee[:, :3]
                 right_xyz = right_ee[:, :3]
-                if normalize: proprio = minmax_normalize(proprio, global_min, global_max)
+                if normalize: proprio = meanstd_normalize(proprio, global_mean, global_std)
 
             elif dataset_name == "robotwin2_abs_qpos":
+                data_type = "abs"
                 left_joint = data["joint_action/left_arm"][()]
                 right_joint = data["joint_action/right_arm"][()]
                 left_grip = data["joint_action/left_gripper"][()]
@@ -176,9 +351,10 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                     right_joint,
                     right_grip[:, None]
                 ], axis=-1)
-                if normalize: proprio = minmax_normalize(proprio, global_min, global_max)
+                if normalize: proprio = meanstd_normalize(proprio, global_mean, global_std)
 
             elif dataset_name == 'robotwin2_rel_ee':
+                data_type = "rel"
                 left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
                 right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
                 left_grip = data["endpose/left_gripper"][()]    # shape (T,)
@@ -209,6 +385,7 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
                     proprio = meanstd_normalize(proprio, global_mean, global_std)
 
             elif dataset_name == 'robotwin2_rel_qpos':
+                data_type = "rel"
                 left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
                 right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
                 left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
@@ -236,9 +413,35 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
 
             else:
                 raise NotImplementedError(f"Dataset type {dataset_name} not handled yet")
+
+            print('proprio', proprio.shape)
             action_seq = proprio[1:]
-            # print('proprio', proprio.shape)
             collected.append(action_seq)
+
+            if compute_loss:
+                for idx in range(proprio.shape[0]): # (139, 20)
+                    print("images[idx]", type(images[idx]))
+                    image_input = np.array(decode_image_from_bytes(images[idx]))
+                    print('image_input type', type(image_input))
+                    proprio_input = proprio[0]
+                    print('proprio_input', proprio_input.shape)
+                    # instruction = args["task_name"].replace('_', ' ') # np.random.choice(results[0][instruction_type])
+                    query = {
+                        # "proprio": json_numpy.dumps(np.zeros_like(self.proprio)), #.reshape(1,-1),  # (1, 14)
+                        "proprio": json_numpy.dumps(proprio_input),
+                        "language_instruction": task_name,
+                        "image0": json_numpy.dumps(image_input),
+                        "data_type": data_type
+                        # "image1": json_numpy.dumps(left_view),
+                        # "image2": json_numpy.dumps(right_view)
+                    }
+
+                    response = requests.post(url, json=query).json()
+                    noise_action = np.array(response['action']).squeeze(0)
+                    print('noise_action', noise_action.shape)
+                    loss = get_loss(noise_action)
+                    plot_loss(loss)
+            
     collected = np.concatenate(collected, axis=0)  # (N, 3)
     # rot6_all = np.concatenate(rot6_all, axis=0)  # (N, 6)
     # Suppose arr is your array of shape (N, 14)
@@ -378,47 +581,64 @@ def plot_qpos_eef_correspondence(qpos, ee, save_path=None):
     plt.close()
     print(f"Saved correspondence plot to {save_path}")
 
+# def compute_loss():
 
 
-name = 'rel_ee'
-# Example usage
-stats_file = None
-metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
-save_folder = "distributions"
-stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_rel.npz"
-print('stats_file', stats_file)
-eef_all = collect_all_actions(metas_path, stats_file)
-print('eef_all[:, :3]', eef_all[:, :3].shape)
-eef_euler = np.concatenate([
-    eef_all[:, :3],
-    rot6_to_euler(eef_all[:, 3:9]),                        # (T,7)
-    eef_all[:, 10][:, None],             # (T,1)
-    eef_all[:, 10:13],
-    rot6_to_euler(eef_all[:, 13:19]),                       # (T,7)
-    eef_all[:, 19][:, None]           # (T,1)
-], axis=-1)
-name = 'rel_qpos'
-# Example usage
-stats_file = None
-metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
-save_folder = "distributions"
-stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_rel.npz"
-print('stats_file', stats_file)
-qpos_all = collect_all_actions(metas_path, stats_file)
+def main(plot_tsne=False, plot_correspondence=False, compute_loss=True):
+    parser = argparse.ArgumentParser(description='single-process evaluation on Calvin bench')
+    parser.add_argument("--host", default='0.0.0.0', help="Your client host ip")
+    parser.add_argument("--port", default=8000, type=int, help="Your client port")
+    # parser.add_argument("--stats_path", default='', type=str, help="Your global stats file for relative data / discrete models")
+    args = parser.parse_args()
 
-plot_qpos_eef_correspondence(qpos_all, eef_euler, save_path=save_folder + "/qpos_eef_correspondence.png")
+    name = 'abs_ee'
+    data_type = 'abs'
+    # Example usage
+    stats_file = None
+    metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
+    save_folder = "distributions"
+    stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_" + data_type + ".npz"
+    print('stats_file', stats_file)
+    eef_all = collect_all_actions(metas_path, stats_file, compute_loss=True, args=args)
+    print('eef_all[:, :3]', eef_all[:, :3].shape)
+    eef_euler = np.concatenate([
+        eef_all[:, :3],
+        rot6_to_euler(eef_all[:, 3:9]),                        # (T,7)
+        eef_all[:, 10][:, None],             # (T,1)
+        eef_all[:, 10:13],
+        rot6_to_euler(eef_all[:, 13:19]),                       # (T,7)
+        eef_all[:, 19][:, None]           # (T,1)
+    ], axis=-1)
+
+    name = 'abs_qpos'
+    # Example usage
+    stats_file = None
+    metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
+    save_folder = "distributions"
+    stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_" + data_type + ".npz"
+    print('stats_file', stats_file)
+    qpos_all = collect_all_actions(metas_path, stats_file, compute_loss=True, args=args)
+
+    qpos_ent, qpos_gau = compute_entropy(qpos_all)
+    print('qpos entropy', qpos_ent, qpos_gau)    
+    ee_ent0, ee_gau = compute_entropy(eef_all)
+    print('ee entropy', ee_ent0, ee_gau)
+    ee_ent, ee_gau = compute_entropy(eef_euler)
+    print('eef_euler entropy', ee_ent, ee_gau)
+    plot_entropy_bar(ee_ent, qpos_ent, data_type, "entropy_bar_" + data_type + ".png")
+    plot_entropy_heatmap(ee_ent, qpos_ent, "entropy_heatmap_" + data_type + ".png")
+
+    if plot_correspondence:
+        plot_qpos_eef_correspondence(qpos_all, eef_euler, save_path=save_folder + "/qpos_eef_correspondence.png")
+
+    if plot_tsne:
+        file_name = metas_path.split('/')[-1].split('.')[0] + '.png'
+        print(file_name)
+        plot_action_dim_distributions(collected, os.path.join(save_folder, file_name))
+        plot_tsne(collected, save_folder)
 
 
+    # plot_pca(collected, save_path)
 
-file_name = metas_path.split('/')[-1].split('.')[0] + '.png'
-print(file_name)
-# plot_action_dim_distributions(collected, os.path.join(save_folder, file_name))
-# plot_tsne(collected, save_folder)
-
-
-# save_folder = "tsne_results"
-# os.makedirs(save_folder, exist_ok=True)
-# save_path = os.path.join(save_folder, "tsne_"+file_name)
-# plot_tsne(collected, save_path, perplexity=30, max_iter=1000)
-# save_path = os.path.join(save_folder, "pca_"+file_name)
-# plot_pca(collected, save_path)
+if __name__ == "__main__":
+    main()

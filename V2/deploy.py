@@ -100,10 +100,30 @@ class DeployModel:
         # print('dequantized action:', action)
         return action
 
+<<<<<<< HEAD
+    def abs_recon(self, action_seq):
+        # de-normalize 
+        action_unnorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        return action_unnorm
+
+    def rel_recon(self, action_seq, proprio_start):
+        # de-normalize 
+        diff_denorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
+        diff_denorm = np.asarray(diff_denorm).reshape(-1, 20)
+        # recover absolute positions from diff
+        # print('proprio_start', diff_denorm.shape, proprio_start.shape)
+        left_xyz_start = proprio_start[:, :3]
+        left_rot6_start = proprio_start[:, 3:9]
+        left_grip_start = proprio_start[:, 10]
+        right_xyz_start = proprio_start[:, 10:13]
+        right_rot6_start = proprio_start[:, 13:19]
+        right_grip_start = proprio_start[:, 19]
+=======
     def proprio_norm(self, proprio):
         r = (proprio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
         # print('proprio', proprio.shape) (14,) or (20,)
         return r.reshape(proprio.shape[0],)
+>>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
 
     def abs_recon(self, action_seq, proprio_start, discrete=False):
         print('un-normalizing for absoluate')
@@ -186,9 +206,13 @@ class DeployModel:
         try:  
             self.model.eval()
             image_list = []        
-            if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"])))
+            if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"]).astype(np.uint8)))
             language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsqueeze(0)
+            
+            # raw_bytes = base64.b64decode(payload["image0"])
+            # img = Image.open(io.BytesIO(raw_bytes))
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
+
             proprio = np.array(json_numpy.loads(payload['proprio']))
             proprio_normed = self.proprio_norm(proprio)
             # save lang
@@ -196,19 +220,30 @@ class DeployModel:
             # print('current proprio', proprio)
             # print("payload['data_type']", payload['data_type'])
 
+            # norm proprio
+            # proprio_norm = (propio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+
             inputs = {
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+<<<<<<< HEAD
+                'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
+=======
                 'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+>>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
             }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
+<<<<<<< HEAD
+                print('action', action)
+=======
                 # print('action', action)
                 discrete = False
                 if 'dis' in self.model_name:
                         action = self.dequantize_action(action) # contain min max normalization (0, 1)
                         discrete = True
+>>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
                 if 'data_type' in payload.keys():
                     if payload['data_type'] == 'rel':
                         # print('action', action.shape)
@@ -223,9 +258,15 @@ class DeployModel:
                                 'global_std': self.global_std.tolist()
                             }
                         )
+<<<<<<< HEAD
+                    else:
+                        print('abs action', action.shape)
+                        # action_unnorm = self.abs_recon(action)
+=======
                     else: # we do mean std un-normalization for abs
                         action_unnorm = self.abs_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
                         # print('action_sum', action_sum)
+>>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
                         return JSONResponse(
                             {
                                 'action': action.tolist(), 

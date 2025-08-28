@@ -76,15 +76,9 @@ def rotate6D_to_quat(v6: np.ndarray) -> np.ndarray:
 
 
 def decode_image_from_bytes(camera_rgb_image):
-    if isinstance(camera_rgb_image, (bytes, bytearray)): camera_rgb_image = np.frombuffer(camera_rgb_image, dtype=np.uint8)
-    rgb = cv2.imdecode(camera_rgb_image, cv2.IMREAD_COLOR)
-    if rgb is None: 
-        rgb = np.frombuffer(camera_rgb_image, dtype=np.uint8) 
-        if rgb.size == 2764800: 
-            rgb = rgb.reshape(720, 1280, 3) 
-        elif rgb.size == 921600: 
-            rgb = rgb.reshape(480, 640, 3)
-    return Image.fromarray(rgb)
+    if isinstance(camera_rgb_image, (bytes, bytearray)):
+        camera_rgb_image = np.frombuffer(camera_rgb_image, np.uint8)
+    return cv2.imdecode(camera_rgb_image, cv2.IMREAD_COLOR)
 
 def save_results(path, task_name, rewards, video_records):
     video_path = os.path.join(path, f"{task_name}")
