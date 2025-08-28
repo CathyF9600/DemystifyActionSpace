@@ -100,7 +100,6 @@ class DeployModel:
         # print('dequantized action:', action)
         return action
 
-<<<<<<< HEAD
     def abs_recon(self, action_seq):
         # de-normalize 
         action_unnorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
@@ -118,12 +117,10 @@ class DeployModel:
         right_xyz_start = proprio_start[:, 10:13]
         right_rot6_start = proprio_start[:, 13:19]
         right_grip_start = proprio_start[:, 19]
-=======
     def proprio_norm(self, proprio):
         r = (proprio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
         # print('proprio', proprio.shape) (14,) or (20,)
         return r.reshape(proprio.shape[0],)
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
 
     def abs_recon(self, action_seq, proprio_start, discrete=False):
         print('un-normalizing for absoluate')
