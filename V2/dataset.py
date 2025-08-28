@@ -216,6 +216,68 @@ class InfiniteDataReader(IterableDataset):
                 #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+            elif dataset_name == 'real_abs_qpos':
+                freq = self.num_actions  # adjust if needed
+                prorpio_seq = data['observations/qpos'][()]
+                # print('prorpio_seq', prorpio_seq)
+                action_seq = prorpio_seq[1:]
+                # if not self.discretize: # only do min max normalization (later) for discrete model
+                #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+            elif dataset_name == 'real_rel_ee':
+                freq = self.num_actions  # adjust if needed
+                prorpio_seq = data['observations/eef_quaternion'][()]
+                left_ee = prorpio_seq[:, :7]
+                right_ee = prorpio_seq[:, 8:15]
+                left_grip = prorpio_seq[:, 7]
+                right_grip = prorpio_seq[:, 15]
+                prorpio_seq = np.concatenate([
+                    left_ee[:, :3],
+                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
+                    left_grip[:, None],             # (T,1)
+                    right_ee[:, :3],
+                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
+                    right_grip[:, None]             # (T,1)
+                ], axis=-1)
+                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
+                right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
+                left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
+                right_delta_rot6d = cal_delta_rotate(right_ee[1:, 3:], right_ee[:-1, 3:])
+                ee_diff = np.concatenate([
+                    left_delta_xyz,
+                    left_delta_rot6d,
+                    left_grip[1:, None],   # future gripper value
+                    right_delta_xyz,
+                    right_delta_rot6d,
+                    right_grip[1:, None]
+                ], axis=-1)
+                if not self.discretize: # only do min max normalization (later) for discrete model
+                    action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                else:
+                    action_seq = ee_diff
+                index_list = list(range(0, action_seq.shape[0] - freq))
+            elif dataset_name == 'real_rel_qpos':
+                freq = self.num_actions  # adjust if needed
+                prorpio_seq = data['observations/qpos'][()]
+                left_joint = prorpio_seq[:, :6]
+                right_joint = prorpio_seq[:, 7:13]
+                left_grip = prorpio_seq[:, 6]
+                right_grip = prorpio_seq[:, 13]
+                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                joint_diff = np.concatenate([
+                    left_joint[1:] - left_joint[:-1],
+                    left_grip[1:, None],  # use future value directly
+                    right_joint[1:] - right_joint[:-1],
+                    right_grip[1:, None]
+                ], axis=-1)
+                if not self.discretize:
+                    action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                else:
+                    action_seq = joint_diff
+                index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
+
             else: raise NotImplementedError
             
             random.shuffle(index_list)

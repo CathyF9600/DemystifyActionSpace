@@ -4,16 +4,6 @@ export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
-<<<<<<< HEAD
-ckpt_path=/home/fyc/EmpiricalStudyForVLA/V2/exp_A100/cnt/abs_ee/ckpt-final
-model_name='model_abs_ee_cnt'
-
-# source /home/dodo/miniconda3/etc/profile.d/conda.sh
-source /home/anaconda3/etc/profile.d/conda.sh #A100
-conda deactivate
-conda activate em
-
-=======
 # ckpt_path=/data/empirical/aug12/cnt_abs_ee/ckpt-75w
 ckpt_path=/data/empirical/cnt-50/abs_ee_20t
 model_name='model_abs_ee_cnt'
@@ -23,7 +13,6 @@ stats_path=/data/empirical/cnt-50/abs_ee_20t
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
 python deploy.py \
     --ckpt_path $ckpt_path \
     --stats_path $stats_path \
