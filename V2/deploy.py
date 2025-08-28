@@ -100,7 +100,6 @@ class DeployModel:
         # print('dequantized action:', action)
         return action
 
-<<<<<<< HEAD
     def abs_recon(self, action_seq):
         # de-normalize 
         action_unnorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
@@ -118,12 +117,10 @@ class DeployModel:
         right_xyz_start = proprio_start[:, 10:13]
         right_rot6_start = proprio_start[:, 13:19]
         right_grip_start = proprio_start[:, 19]
-=======
     def proprio_norm(self, proprio):
         r = (proprio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
         # print('proprio', proprio.shape) (14,) or (20,)
         return r.reshape(proprio.shape[0],)
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
 
     def abs_recon(self, action_seq, proprio_start, discrete=False):
         print('un-normalizing for absoluate')
@@ -226,24 +223,16 @@ class DeployModel:
             inputs = {
                 'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                 'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-<<<<<<< HEAD
                 'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
-=======
-                'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
+                # 'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
             }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
-<<<<<<< HEAD
-                print('action', action)
-=======
-                # print('action', action)
                 discrete = False
                 if 'dis' in self.model_name:
                         action = self.dequantize_action(action) # contain min max normalization (0, 1)
                         discrete = True
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
                 if 'data_type' in payload.keys():
                     if payload['data_type'] == 'rel':
                         # print('action', action.shape)
@@ -258,15 +247,12 @@ class DeployModel:
                                 'global_std': self.global_std.tolist()
                             }
                         )
-<<<<<<< HEAD
                     else:
                         print('abs action', action.shape)
                         # action_unnorm = self.abs_recon(action)
-=======
-                    else: # we do mean std un-normalization for abs
+                        # we do mean std un-normalization for abs
                         action_unnorm = self.abs_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
                         # print('action_sum', action_sum)
->>>>>>> 10303c44ec3cfa69e91e86435de2df11703494e4
                         return JSONResponse(
                             {
                                 'action': action.tolist(), 
