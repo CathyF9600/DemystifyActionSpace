@@ -78,7 +78,10 @@ setup(
         "x-transformers",
         "yapf",
         "protobuf",
-        "sentencepiece"
+        "sentencepiece",
+        "json_numpy",
+        "uvicorn",
+        "fastapi"
     ],
     python_requires=">=3.10,<3.11",
 )
