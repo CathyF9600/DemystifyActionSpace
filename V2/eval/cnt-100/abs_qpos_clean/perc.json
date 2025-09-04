@@ -1,0 +1,10 @@
+{"sim/adjust_bottle": 30.0}
+{"sim/dump_bin_bigbin": 60.0}
+{"sim/grab_roller": 70.0}
+{"sim/lift_pot": 30.0}
+{"sim/move_playingcard_away": 30.0}
+{"sim/open_laptop": 30.0}
+{"sim/place_burger_fries": 30.0}
+{"sim/place_container_plate": 30.0}
+{"sim/press_stapler": 50.0}
+{"sim/shake_bottle_horizontally": 60.0}

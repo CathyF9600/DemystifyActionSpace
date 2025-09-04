@@ -294,7 +294,7 @@ class InfiniteDataReader(IterableDataset):
                     ins = process_name(datapath)
                     # print('ins', ins)
                 else:
-                    ins = datapath.split('/')[-3].replace('_', ' ')  # -4
+                    ins = datapath.split('/')[-4].replace('_', ' ')  # -4
                 # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
