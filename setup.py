@@ -78,7 +78,14 @@ setup(
         "x-transformers",
         "yapf",
         "protobuf",
-        "sentencepiece"
+        "sentencepiece",
+        "rospkg", # for ACT
+        "pexpect",
+        "mujoco",
+        "dm_control",
+        "opencv-python",
+        "einops",
+        "ipython"
     ],
     python_requires=">=3.10,<3.11",
 )
