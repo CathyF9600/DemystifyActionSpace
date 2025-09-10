@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 from pathlib import Path
 import subprocess
 from accelerate import Accelerator
-from dataset import create_dataloader
+from dataset import create_dataloader, create_act_dataloader
 import model
 from act_policy import ACTPolicy
 from timm import create_model
@@ -63,35 +63,35 @@ def get_args_parser():
     parser.add_argument('--normalize_action', default=False, action='store_true', help='load ckpt path')
     parser.add_argument('--normalize_proprio', default=False, action='store_true', help='load ckpt path')
 
-    # ACT
-    parser.add_argument("--eval", action="store_true")
-    parser.add_argument("--onscreen_render", action="store_true")
-    parser.add_argument("--ckpt_dir", action="store", type=str, help="ckpt_dir", required=True)
-    parser.add_argument(
-        "--policy_class",
-        action="store",
-        type=str,
-        help="policy_class, capitalize",
-        required=True,
-    )
-    parser.add_argument("--task_name", action="store", type=str, help="task_name", required=True)
-    parser.add_argument("--batch_size", action="store", type=int, help="batch_size", required=True)
-    # parser.add_argument("--seed", action="store", type=int, help="seed", required=True)
-    parser.add_argument("--num_epochs", action="store", type=int, help="num_epochs", required=True)
-    parser.add_argument("--lr", action="store", type=float, help="lr", required=True)
+    # # ACT
+    # parser.add_argument("--eval", action="store_true")
+    # parser.add_argument("--onscreen_render", action="store_true")
+    # parser.add_argument("--ckpt_dir", action="store", type=str, help="ckpt_dir", required=True)
+    # parser.add_argument(
+    #     "--policy_class",
+    #     action="store",
+    #     type=str,
+    #     help="policy_class, capitalize",
+    #     required=True,
+    # )
+    # parser.add_argument("--task_name", action="store", type=str, help="task_name", required=True)
+    # parser.add_argument("--batch_size", action="store", type=int, help="batch_size", required=True)
+    # # parser.add_argument("--seed", action="store", type=int, help="seed", required=True)
+    # parser.add_argument("--num_epochs", action="store", type=int, help="num_epochs", required=True)
+    # parser.add_argument("--lr", action="store", type=float, help="lr", required=True)
 
-    # for ACT
-    parser.add_argument("--kl_weight", action="store", type=int, help="KL Weight", required=False)
-    parser.add_argument("--chunk_size", action="store", type=int, help="chunk_size", required=False)
-    parser.add_argument("--hidden_dim", action="store", type=int, help="hidden_dim", required=False)
-    parser.add_argument(
-        "--dim_feedforward",
-        action="store",
-        type=int,
-        help="dim_feedforward",
-        required=False,
-    )
-    parser.add_argument("--temporal_agg", action="store_true")
+    # # for ACT
+    # parser.add_argument("--kl_weight", action="store", type=int, help="KL Weight", required=False)
+    # parser.add_argument("--chunk_size", action="store", type=int, help="chunk_size", required=False)
+    # parser.add_argument("--hidden_dim", action="store", type=int, help="hidden_dim", required=False)
+    # parser.add_argument(
+    #     "--dim_feedforward",
+    #     action="store",
+    #     type=int,
+    #     help="dim_feedforward",
+    #     required=False,
+    # )
+    # parser.add_argument("--temporal_agg", action="store_true")
     return parser
 
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
@@ -290,8 +290,9 @@ def make_policy(policy_class):
         }
 
         SIM_TASK_CONFIGS["policy_config"] = policy_config
-        policy = ACTPolicy(SIM_TASK_CONFIGS)
         print(">>> Create ACT Policy", SIM_TASK_CONFIGS)
+
+        policy = ACTPolicy(args_override=SIM_TASK_CONFIGS)
     else:
         raise NotImplementedError
     return policy
@@ -339,28 +340,39 @@ def main(args):
     accelerator.print(f'number of params: {n_parameters} M')
 
     stats = compute_mean_std(hdf5_files, control=control, data_type=data_type, env=env)
-    model.normalizer.set_dataset_stats(
-        mean={
-            "proprio": stats["proprio"]["mean"],
-            "action": stats["action"]["mean"],
-        },
-        std={
-            "proprio": stats["proprio"]["std"],
-            "action": stats["action"]["std"],
-        }
-    )
-    
-    train_dataloader = iter(create_dataloader(
-        rank = args.rank,
-        world_size = args.world_size,
-        batch_size = args.batch_size,
-        metas_path = args.train_metas_path,
-        num_actions= model.num_action_chunk,
-        model_type=args.model_type,
-        num_bins=args.num_bins,
-        pt_path = args.pt_path,
-        normalizer = model.normalizer
-    ))
+    if args.model_type != 'ACT':
+        model.normalizer.set_dataset_stats(
+            mean={
+                "proprio": stats["proprio"]["mean"],
+                "action": stats["action"]["mean"],
+            },
+            std={
+                "proprio": stats["proprio"]["std"],
+                "action": stats["action"]["std"],
+            }
+        )
+        train_dataloader = iter(create_dataloader(
+            rank = args.rank,
+            world_size = args.world_size,
+            batch_size = args.batch_size,
+            metas_path = args.train_metas_path,
+            num_actions= model.num_action_chunk,
+            model_type=args.model_type,
+            num_bins=args.num_bins,
+            pt_path = args.pt_path,
+            normalizer = model.normalizer
+        ))
+    else:
+        train_dataloader = create_act_dataloader(
+            rank = args.rank,
+            world_size = args.world_size,
+            batch_size = args.batch_size,
+            metas_path = args.train_metas_path,
+            num_actions= 50,
+            model_type=args.model_type,
+            num_bins=args.num_bins,
+            pt_path = args.pt_path,
+        )
     
     model = model.to(torch.float32)
     # 设置优化器参数组
@@ -375,9 +387,11 @@ def main(args):
     if args.resume is not None:
         accelerator.print('>>>>>> resume from {}'.format(args.resume))
         accelerator.load_state(args.resume)
+
     train_dataloader = iter(train_dataloader)
     model.train()
     accelerator.print(f"Start training for {args.iters} iters")
+
     for iters in range(args.iters):
         past_time = time.time()
         data = next(train_dataloader)

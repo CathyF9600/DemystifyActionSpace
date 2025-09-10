@@ -46,7 +46,6 @@ class InfiniteDataReader(IterableDataset):
                  num_actions = 10,
                  num_bins = 256,
                  pt_path = "encoded_language.pt",
-                 normalizer = None
                  ):
         #### read meta files, please put all json file in a one directory（metas_path）
         self.rank = rank
@@ -72,23 +71,12 @@ class InfiniteDataReader(IterableDataset):
         ])
         self.language_emb = torch.load(pt_path, map_location="cpu")
         print('metas_path', metas_path)
-        # if 'rel' in metas_path or self.discretize:
         if 'rel' in metas_path:
             data_type = 'rel'
         else:
             data_type = 'abs'
         stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats_" + data_type + ".npz")
-        # print('Loading mean and std from', stats_file)
-        # stats = np.load(stats_file)
-        # self.global_mean = np.asarray(stats["mean"])
-        # self.global_std = np.asarray(stats["std"])
-        # self.global_min = np.asarray(stats["min"])
-        # self.global_max = np.asarray(stats["max"])
-        # try:
-        #     self.p5 = np.asarray(stats["p5"])
-        #     self.p95 = np.asarray(stats["p95"])
-        # except:
-        #     print('no p5 p95')
+
 
     def quantize_action(self, action):
         # Normalize to [0, 1] using precomputed global min/max
@@ -345,6 +333,18 @@ class InfiniteDataReader(IterableDataset):
                         return get_next_item()
                 yield get_next_item()
 
+class ACTWrapperDataset(torch.utils.data.IterableDataset):
+    def __init__(self, base_dataset, max_action_len):
+        self.base_dataset = base_dataset
+        self.max_action_len = max_action_len
+
+    def __iter__(self):
+        for items in self.base_dataset:
+            image_data = items['images']              # (cams, C, H, W)
+            qpos_data = items['proprio']              # (proprio_dim,)
+            action_data = items['action_seq']
+
+            yield image_data, qpos_data, action_data, is_pad
 
 def create_dataloader(
                  rank:int,
@@ -354,8 +354,7 @@ def create_dataloader(
                  num_actions,
                  model_type,
                  num_bins,
-                 pt_path,
-                 normalizer
+                 pt_path
                  ):
     return DataLoader(
             InfiniteDataReader(
@@ -365,10 +364,34 @@ def create_dataloader(
                  num_actions = num_actions,
                  model_type = model_type,
                  num_bins = num_bins,
-                 pt_path = pt_path,
-                 normalizer = normalizer
+                 pt_path = pt_path
                  ),
             batch_size=batch_size,
             num_workers=4,
             pin_memory=True
     )
+
+def create_act_dataloader(
+                 rank:int,
+                 world_size:int,
+                 batch_size: int,
+                 metas_path:str,
+                 num_actions,
+                 model_type,
+                 num_bins,
+                 pt_path
+                 ):
+    return ACTWrapperDataset(            
+                InfiniteDataReader(
+                 rank = rank,
+                 world_size = world_size,
+                 metas_path = metas_path,
+                 num_actions = num_actions,
+                 model_type = model_type,
+                 num_bins = num_bins,
+                 pt_path = pt_path
+                ), 
+            max_action_len=50
+    )  # pick same as ACT config
+
+    

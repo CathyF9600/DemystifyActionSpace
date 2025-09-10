@@ -11,7 +11,7 @@ import IPython
 e = IPython.embed
 
 
-def get_args_parser():
+def get_args_parser_detr():
     parser = argparse.ArgumentParser("Set transformer detector", add_help=False)
     parser.add_argument("--lr", default=1e-4, type=float)  # will be overridden
     parser.add_argument("--lr_backbone", default=1e-5, type=float)  # will be overridden
@@ -120,32 +120,17 @@ def get_args_parser():
 
 
 def build_ACT_model_and_optimizer(args_override, RoboTwin_Config=None):
-    # if RoboTwin_Config is None:
-    #     parser = argparse.ArgumentParser("DETR training and evaluation script", parents=[get_args_parser()])
-    #     args = parser.parse_args()
-    #     for k, v in args_override.items():
-    #         setattr(args, k, v)
-    # else:
-    #     args = RoboTwin_Config
-    args = RoboTwin_Config
-
-    # if RoboTwin_Config is not None:
-    #     print("Directly pass RoboTwin_Config through")
-    #     args = RoboTwin_Config
-    # else:
-    #     if isinstance(args_override, dict):
-    #         # Bypass argparse, build a dummy object
-    #         class Args: pass
-    #         args = Args()
-    #         for k, v in args_override.items():
-    #             setattr(args, k, v)
-    #     else:
-    #         # Fall back to CLI mode
-    #         parser = argparse.ArgumentParser("DETR training and evaluation script", parents=[get_args_parser()])
-    #         args = parser.parse_args()
-    #         if args_override is not None:
-    #             for k, v in vars(args_override).items():
-    #                 setattr(args, k, v)
+    if RoboTwin_Config is not None:
+        args = RoboTwin_Config
+    elif isinstance(args_override, dict):
+        # Build a dummy args object directly from dict
+        class Args: pass
+        args = Args()
+        for k, v in args_override.items():
+            setattr(args, k, v)
+    else:
+        parser = argparse.ArgumentParser("DETR training and evaluation script", parents=[get_args_parser_detr()])
+        args = parser.parse_args()
 
     print("build_ACT_model_and_optimizer", args)
 
