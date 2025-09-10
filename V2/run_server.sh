@@ -1,14 +1,19 @@
 #!/bin/bash
-port=18883
+port=18873
 export CUDA_VISIBLE_DEVICES=0 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
 # ckpt_path=/data/empirical/aug12/cnt_abs_ee/ckpt-75w
-ckpt_path=/data/empirical/cnt-50/abs_ee_20t
-model_name='model_abs_ee_cnt'
+ckpt_path=/home/dodo/fyc/EmpiricalStudyForVLA/V2/exp_dodo/cnt-100-10-mlp6/abs_ee/ckpt-final
+stats_path=/home/dodo/fyc/EmpiricalStudyForVLA/datasets_dodo/meta_files
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-100-10-mlp6/abs_ee
+model_name='model_abs_ee_cnt_mlp6'
 
-stats_path=/data/empirical/cnt-50/abs_ee_20t
+# ckpt_path=/home/dodo/fyc/EmpiricalStudyForVLA/V2/exp_dodo/cnt-200/abs_ee/ckpt-final
+# stats_path=/home/dodo/fyc/EmpiricalStudyForVLA/datasets_dodo/meta_files/200data10task
+# eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-200/abs_ee_retrain
+# model_name='model_abs_ee_cnt'
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
@@ -17,6 +22,7 @@ python deploy.py \
     --ckpt_path $ckpt_path \
     --stats_path $stats_path \
     --model_name $model_name \
+    --norm_action True \
     --host 0.0.0.0 \
     --port $port &
 
@@ -27,7 +33,6 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/abs_ee_20t
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type abs \
@@ -38,7 +43,7 @@ python script/robotwin_client_v2.py \
     --num_episodes 10 \
     --device 0 \
     --seed 3 \
-    --task_name all \
+    --task_name "4" \
     --output_path $eval_log_dir \
     --task_config demo_randomized \
     --instruction_type seen #> $eval_log_dir/log.txt 2>&1

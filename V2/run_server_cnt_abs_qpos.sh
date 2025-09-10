@@ -1,13 +1,21 @@
 #!/bin/bash
-port=18892
+port=18886
 export CUDA_VISIBLE_DEVICES=1 #4,5,6,7
 export PYTHONPATH=$PWD:$PYTHONPATH
 export HF_ENDPOINT=https://hf-mirror.com
 # ckpt_path='/home/dodo/fyc/zhengjl-ckpt/all'
-ckpt_path=/data/empirical/cnt-50/abs_qpos_20t
-# /data/empirical/aug12/cnt_abs_qpos/ckpt-25w
-model_name='model_abs_qpos_cnt'
-stats_path=/data/empirical/cnt-50/abs_qpos_20t
+ckpt_path=/home/dodo/fyc/EmpiricalStudyForVLA/V2/exp_dodo/cnt-100-10-mlp6/abs_qpos/ckpt-final
+stats_path=/home/dodo/fyc/EmpiricalStudyForVLA/datasets_dodo/meta_files
+eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-100-10-mlp6/abs_qpos
+model_name='model_abs_qpos_cnt_mlp6'
+
+# ckpt_path=/data/empirical/cnt-100/abs_qpos
+# stats_path=/data/empirical/cnt-100
+# eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-100/abs_qpos_indomain
+# ckpt_path=/home/dodo/fyc/EmpiricalStudyForVLA/V2/exp_dodo/cnt-200/abs_qpos/ckpt-final
+# stats_path=/home/dodo/fyc/EmpiricalStudyForVLA/datasets_dodo/meta_files/200data10task
+# eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-200/abs_qpos_retrain
+# model_name='model_abs_qpos_cnt'
 
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
@@ -17,6 +25,7 @@ python deploy.py \
     --ckpt_path $ckpt_path \
     --stats_path $stats_path \
     --model_name $model_name \
+    --norm_action True \
     --host 0.0.0.0 \
     --port $port &
 
@@ -27,7 +36,6 @@ conda deactivate
 conda activate RoboTwin
 # pip install json-numpy
 # pip install uvicorn
-eval_log_dir=/home/dodo/fyc/EmpiricalStudyForVLA/V2/eval/cnt-50/abs_qpos_20t
 cd /home/dodo/fyc/RoboTwin
 python script/robotwin_client_v2.py \
     --data_type abs \
@@ -40,8 +48,8 @@ python script/robotwin_client_v2.py \
     --seed 3 \
     --task_name all \
     --output_path $eval_log_dir \
-    --task_config demo_randomized \
-    --instruction_type seen #> $eval_log_dir/log.txt 2>&1
+    --task_config demo_randomized 
+    # --indomain True #> $eval_log_dir/log.txt 2>&1
 
 PID=$(lsof -i :$port -t)
 kill -9 $PID

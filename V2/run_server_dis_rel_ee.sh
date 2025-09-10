@@ -11,7 +11,6 @@ model_name='model_rel_ee_dis'
 source /home/dodo/miniconda3/etc/profile.d/conda.sh
 conda deactivate
 conda activate em
-# env > script_env_bug.txt
 python deploy.py \
     --ckpt_path $ckpt_path \
     --stats_path $stats_path \

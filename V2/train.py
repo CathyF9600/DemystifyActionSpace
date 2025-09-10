@@ -201,6 +201,14 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             right_delta_rot6d,
                             right_grip[1:, None]
                         ], axis=-1)
+                        action_seq = np.concatenate([
+                            left_delta_xyz,
+                            left_delta_rot6d,
+                            left_grip[1:, None],
+                            right_delta_xyz,
+                            right_delta_rot6d,
+                            right_grip[1:, None]
+                        ], axis=-1)
             if data_type == 'abs':
                 if control == 'qpos':
                     if env == 'real':

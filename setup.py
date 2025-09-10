@@ -86,6 +86,9 @@ setup(
         "opencv-python",
         "einops",
         "ipython"
+        "json_numpy",
+        "uvicorn",
+        "fastapi"
     ],
     python_requires=">=3.10,<3.11",
 )

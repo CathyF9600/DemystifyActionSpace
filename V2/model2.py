@@ -1,5 +1,9 @@
 import torch
 import torch.nn as nn
+<<<<<<< HEAD
+=======
+import torch.nn.functional as F
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
 from timm.models.registry import register_model
 from timm.models import create_model
 import timm.models
@@ -7,9 +11,30 @@ from typing import List
 from transformers import AutoTokenizer, SiglipTextModel
 from timm.models.vision_transformer import Mlp
 import math
+<<<<<<< HEAD
 
 print("model init")
 
+=======
+import json
+
+def interpolate_n(x, target_n: int):
+    """
+    x: (b, n, d) 的张量
+    target_n: 插值后的 n 维度大小
+    return: (b, target_n, d)
+    """
+    b, n, d = x.shape
+    # 变换为 (b, d, n)，让 n 作为长度维度
+    x = x.permute(0, 2, 1)
+    # 插值
+    x = F.interpolate(
+        x, size=target_n, mode="linear", align_corners=True
+    )
+    # 再转回 (b, target_n, d)
+    x = x.permute(0, 2, 1)
+    return x
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
 
 def basic_init(module):
     if isinstance(module, nn.Linear):
@@ -120,6 +145,7 @@ class MlpDecoder(nn.Module):
 
 class BaseModel(nn.Module):
     def __init__(self,
+<<<<<<< HEAD
                  vision_backbone = "resnet18.a1_in1k",
                  model_type = "continuous",
                  dim_language = 768,
@@ -136,6 +162,42 @@ class BaseModel(nn.Module):
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
         self.dim_actions = dim_actions
+=======
+                 meta_file,
+                 depth = 3,
+                 vision_backbone = "resnet18.a1_in1k",
+                 model_type = "continuous",
+                 control_interface = "abs_ee", ### abs_ee, rel_ee, abs_qpos, rel_pos
+                 dim_language = 768,
+                 num_action_chunk = 10,
+                 loss_scale = 1000,
+                 num_bins = 256,
+                 mask_proprio = False,
+                 **kwargs
+                 ):
+        super().__init__()
+        self.mask_proprio = mask_proprio
+        self.loss_scale = loss_scale
+        self.model_type = model_type
+        self.num_action_chunk = num_action_chunk
+        self.control_interface = control_interface
+        meta = torch.load(meta_file, map_location="cpu")
+        self.register_buffer("action_min", 
+                                meta[control_interface]['min'].view(1, 1, -1), 
+                                persistent=False)
+        self.register_buffer("action_max", 
+                                meta[control_interface]['max'].view(1, 1, -1), 
+                                persistent=False)
+        self.register_buffer("proprio_min", 
+                                meta[control_interface.replace('rel', 'abs')]['min'].view(1, -1), 
+                                persistent=False)
+        self.register_buffer("proprio_max", 
+                                meta[control_interface.replace('rel', 'abs')]['max'].view(1, -1), 
+                                persistent=False)
+        
+        self.dim_proprio = self.dim_actions = 14 if 'qpos' in control_interface else 20
+        
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         print('num_bins:', num_bins)
         if model_type == 'discrete':
             assert num_bins > 0, "num_bins must be greater than 0 for discrete models"
@@ -154,19 +216,77 @@ class BaseModel(nn.Module):
                                     dim_visual = self.vision_backbone.num_features,
                                     dim_language = dim_language,
                                     num_views = 1,
+<<<<<<< HEAD
                                     dim_actions = dim_actions,
                                     dim_proprio = dim_proprio,
+=======
+                                    dim_actions = self.dim_actions,
+                                    dim_proprio = self.dim_proprio,
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
                                     num_action_chunk = num_action_chunk,
                                     num_bins = self.num_bins,
                                     )
         if model_type == 'discrete': self.loss = nn.CrossEntropyLoss()
         else: self.loss = nn.HuberLoss(delta=0.1)
 
+<<<<<<< HEAD
     def forward(self,
                 images: torch.FloatTensor, # B * V * C * H * W,
                 encoded_language: torch.Tensor, # B C
                 proprio: torch.Tensor, # B C
                 action_seq: torch.Tensor):
+=======
+    def normalize_action(self, 
+                         action # B N C
+                         ):
+        if self.model_type == 'discrete': 
+            action = (action - self.action_min) / (self.action_max - self.action_min)
+            action = (action * self.num_bins).floor().long()
+            action = torch.clamp(action, 0, self.num_bins - 1)
+        return action
+    
+    def normalize_proprio(self, proprio):
+        if self.mask_proprio: return torch.zeros_like(proprio)
+        return proprio
+       #return (proprio - self.proprio_min) / (self.proprio_max - self.proprio_min)
+    
+    def denorm_action(self, 
+                      action
+                      ):
+        if self.model_type == 'discrete': 
+            action = (action.float() + 0.5) / self.num_bins
+            action = action * (self.action_max - self.action_min) + self.action_min
+        return action
+    
+
+    def forward(self,
+                images: torch.FloatTensor, # B * V * C * H * W,
+                encoded_language: torch.Tensor, # B C
+                
+                ee_proprio: torch.Tensor, # B C
+                abs_ee_action,
+                rel_ee_action,
+                
+                qpos_proprio: torch.Tensor,
+                abs_qpos_action,
+                rel_qpos_action
+                ):
+        if self.control_interface == "rel_ee":
+            action_seq = rel_ee_action
+            proprio = ee_proprio
+        elif self.control_interface == "abs_ee":
+            action_seq = abs_ee_action
+            proprio = ee_proprio
+        elif self.control_interface == "rel_qpos":
+            action_seq = rel_qpos_action
+            proprio = qpos_proprio
+        elif self.control_interface == "abs_qpos":
+            action_seq = abs_qpos_action
+            proprio = qpos_proprio
+        
+        action_seq = self.normalize_action(action_seq)
+        proprio = self.normalize_proprio(proprio)
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -192,6 +312,7 @@ class BaseModel(nn.Module):
                 language_feature = encoded_language,
                 proprio = proprio
             )
+<<<<<<< HEAD
         # if self.model_type == 'flow-matching': 
         #     # print('output_action', output_action.shape, actions.shape)
         #     return self.loss(output_action, action_seq)
@@ -199,6 +320,13 @@ class BaseModel(nn.Module):
             return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
         else:
             return self.loss(output_action, action_seq * self.action_scale)
+=======
+
+        if self.model_type == 'discrete':
+            return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
+        else:
+            return self.loss(output_action, action_seq) * self.loss_scale
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         
     def pred_action(self,
                 images: torch.Tensor, # B V C H W
@@ -206,6 +334,10 @@ class BaseModel(nn.Module):
                 proprio: torch.Tensor,
                 steps = 5
             ):
+<<<<<<< HEAD
+=======
+        proprio = self.normalize_proprio(proprio)
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
@@ -213,11 +345,18 @@ class BaseModel(nn.Module):
         _, num_features, N = vision_embedding.shape
         vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
         if self.model_type == 'continuous': 
+<<<<<<< HEAD
             pred_action = self.decoder(
                         visual_feature = vision_embedding,
                         language_feature = encoded_language,
                         proprio = proprio)
             pred_action /= self.action_scale
+=======
+            pred_action = self.decoder(      
+                        visual_feature = vision_embedding,
+                        language_feature = encoded_language,
+                        proprio = proprio)
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         elif self.model_type == 'discrete':
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
@@ -234,6 +373,7 @@ class BaseModel(nn.Module):
                             proprio = proprio,
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
+<<<<<<< HEAD
                 action_with_noise = action_with_noise - (action_with_noise - pred_action / self.action_scale) / time.view(B, 1, 1) / steps
             return action_with_noise # denoised action
         return pred_action
@@ -252,11 +392,47 @@ def model_abs_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+=======
+                action_with_noise = action_with_noise - (action_with_noise - pred_action) / time.view(B, 1, 1) / steps
+            return action_with_noise # denoised action
+        pred_action = self.denorm_action(pred_action)
+        
+        if self.control_interface == "rel_ee":
+            actions = torch.cumsum(pred_action, dim = 1)
+            actions = actions + proprio.unsqueeze(1)
+            actions[:, :, 9] = pred_action[:, :, 9]
+            actions[:, :, 19] = pred_action[:, :, 19]
+            pred_action = actions
+        elif self.control_interface == "rel_qpos":
+            actions = torch.cumsum(pred_action, dim = 1)
+            actions = actions + proprio.unsqueeze(1)
+            actions[:, :, 6] = pred_action[:, :, 6]
+            actions[:, :, 13] = pred_action[:, :, 13]
+            pred_action = actions
+        
+        pred_action = torch.cat([proprio.unsqueeze(1), pred_action], dim = 1)
+        return interpolate_n(pred_action, 30)[:, 1:]
+
+
+@register_model
+def model_abs_ee_con(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "abs_ee",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         num_bins = 1
     )
     return model, language_encoder()
 
 @register_model
+<<<<<<< HEAD
 def model_abs_ee_cnt_act30(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 30,
@@ -306,10 +482,26 @@ def model_abs_ee_cnt_mlp1(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         action_scale = 100,
         num_bins = 1,
         depth = 1
+=======
+def model_abs_ee_con_no_proprio(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "abs_ee",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+        num_bins = 1,
+        mask_proprio = True
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
     )
     return model, language_encoder()
 
 @register_model
+<<<<<<< HEAD
 def model_abs_ee_cnt_mlp6(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 10,
@@ -324,10 +516,42 @@ def model_abs_ee_cnt_mlp6(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         action_scale = 100,
         num_bins = 1,
         depth = 6
+=======
+def model_abs_qpos_con(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "abs_qpos",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+        num_bins = 1
     )
     return model, language_encoder()
 
 @register_model
+def model_abs_qpos_con_no_proprio(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "abs_qpos",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+        num_bins = 1,
+        mask_proprio = True
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
+    )
+    return model, language_encoder()
+
+@register_model
+<<<<<<< HEAD
 def model_abs_ee_cnt_mlp9(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 10,
@@ -358,11 +582,25 @@ def model_abs_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
+=======
+def model_rel_ee_con(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "rel_ee",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
         num_bins = 1
     )
     return model, language_encoder()
 
 @register_model
+<<<<<<< HEAD
 def model_abs_qpos_cnt_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
                 dim_actions = 14, # 14 for euler angles
                 num_action_chunk = 30,
@@ -819,3 +1057,19 @@ def model_rel_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
 #     )
     
 #     print(output)
+=======
+def model_rel_qpos_con(meta_file="metas.pt",
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        meta_file = meta_file,
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        control_interface = "rel_qpos",
+        dim_language = 768,
+        num_action_chunk = num_action_chunk,
+        loss_scale = 1000,
+        num_bins = 1
+    )
+    return model, language_encoder()
+>>>>>>> 34652fe843ad570ef1d0f2970d8ac1bc3950a9ac
