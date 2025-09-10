@@ -44,7 +44,9 @@ class InfiniteDataReader(IterableDataset):
                  metas_path:str,
                  model_type:str,
                  num_actions = 10,
-                 num_bins = 256
+                 num_bins = 256,
+                 pt_path = "encoded_language.pt",
+                 normalizer = None
                  ):
         #### read meta files, please put all json file in a one directory（metas_path）
         self.rank = rank
@@ -62,12 +64,13 @@ class InfiniteDataReader(IterableDataset):
             self.metas[meta['dataset_name']] = meta
         # augmentations
         self.image_aug = transforms.Compose([
-            transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+            # transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+            transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
             transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.3, hue=0.),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
         ])
-        self.language_emb = torch.load("encoded_language.pt", map_location="cpu")
+        self.language_emb = torch.load(pt_path, map_location="cpu")
         print('metas_path', metas_path)
         # if 'rel' in metas_path or self.discretize:
         if 'rel' in metas_path:
@@ -75,17 +78,17 @@ class InfiniteDataReader(IterableDataset):
         else:
             data_type = 'abs'
         stats_file = fileio.join_path(metas_path).replace(".jsonl", "_global_stats_" + data_type + ".npz")
-        print('Loading mean and std from', stats_file)
-        stats = np.load(stats_file)
-        self.global_mean = np.asarray(stats["mean"])
-        self.global_std = np.asarray(stats["std"])
-        self.global_min = np.asarray(stats["min"])
-        self.global_max = np.asarray(stats["max"])
-        try:
-            self.p5 = np.asarray(stats["p5"])
-            self.p95 = np.asarray(stats["p95"])
-        except:
-            print('no p5 p95')
+        # print('Loading mean and std from', stats_file)
+        # stats = np.load(stats_file)
+        # self.global_mean = np.asarray(stats["mean"])
+        # self.global_std = np.asarray(stats["std"])
+        # self.global_min = np.asarray(stats["min"])
+        # self.global_max = np.asarray(stats["max"])
+        # try:
+        #     self.p5 = np.asarray(stats["p5"])
+        #     self.p95 = np.asarray(stats["p95"])
+        # except:
+        #     print('no p5 p95')
 
     def quantize_action(self, action):
         # Normalize to [0, 1] using precomputed global min/max
@@ -128,9 +131,9 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
                 action_seq = prorpio_seq[1:]
-                if not self.discretize: # only do min max normalization (later) for discrete model
-                    action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # if not self.discretize: # only do min max normalization (later) for discrete model
+                #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
                 # print('action_seq', action_seq[:10])
             elif dataset_name == 'robotwin2_abs_qpos': # 14
@@ -146,10 +149,10 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
                 action_seq = prorpio_seq[1:]
-                if not self.discretize:
-                    # print('mean std normalizing abs_qpos')
-                    action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # if not self.discretize:
+                #     # print('mean std normalizing abs_qpos')
+                #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
             elif dataset_name == 'robotwin2_rel_ee':
                 freq = self.num_actions  # adjust if needed
@@ -165,7 +168,7 @@ class InfiniteDataReader(IterableDataset):
                     quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
                 right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
                 left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
@@ -178,10 +181,10 @@ class InfiniteDataReader(IterableDataset):
                     right_delta_rot6d,
                     right_grip[1:, None]
                 ], axis=-1)
-                if not self.discretize: # only do min max normalization (later) for discrete model
-                    action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                else:
-                    action_seq = ee_diff
+                # if not self.discretize: # only do min max normalization (later) for discrete model
+                #     action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # else:
+                action_seq = ee_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))
             elif dataset_name == 'robotwin2_rel_qpos':
                 freq = self.num_actions  # adjust if needed
@@ -195,17 +198,17 @@ class InfiniteDataReader(IterableDataset):
                     right_joint,                    # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 joint_diff = np.concatenate([
                     left_joint[1:] - left_joint[:-1],
                     left_grip[1:, None],  # use future value directly
                     right_joint[1:] - right_joint[:-1],
                     right_grip[1:, None]
                 ], axis=-1)
-                if not self.discretize:
-                    action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                else:
-                    action_seq = joint_diff
+                # if not self.discretize:
+                #     action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # else:
+                action_seq = joint_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
             elif dataset_name == 'real_abs_ee':
                 freq = self.num_actions  # adjust if needed
@@ -240,7 +243,7 @@ class InfiniteDataReader(IterableDataset):
                     quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
                     right_grip[:, None]             # (T,1)
                 ], axis=-1)
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
                 right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
                 left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
@@ -253,10 +256,10 @@ class InfiniteDataReader(IterableDataset):
                     right_delta_rot6d,
                     right_grip[1:, None]
                 ], axis=-1)
-                if not self.discretize: # only do min max normalization (later) for discrete model
-                    action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                else:
-                    action_seq = ee_diff
+                # if not self.discretize: # only do min max normalization (later) for discrete model
+                #     action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # else:
+                action_seq = ee_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))
             elif dataset_name == 'real_rel_qpos':
                 freq = self.num_actions  # adjust if needed
@@ -265,17 +268,21 @@ class InfiniteDataReader(IterableDataset):
                 right_joint = prorpio_seq[:, 7:13]
                 left_grip = prorpio_seq[:, 6]
                 right_grip = prorpio_seq[:, 13]
-                prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 joint_diff = np.concatenate([
                     left_joint[1:] - left_joint[:-1],
                     left_grip[1:, None],  # use future value directly
                     right_joint[1:] - right_joint[:-1],
                     right_grip[1:, None]
                 ], axis=-1)
-                if not self.discretize:
-                    action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                else:
-                    action_seq = joint_diff
+                # print('joint_diff')
+                # min_val = joint_diff.min(axis=0)
+                # max_val = joint_diff.max(axis=0)
+                # print('joint_diff min max', min_val, max_val)
+                # if not self.discretize:
+                #     action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
+                # else:
+                action_seq = joint_diff
                 index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
 
             else: raise NotImplementedError
@@ -292,12 +299,15 @@ class InfiniteDataReader(IterableDataset):
                         # replace underscores with spaces
                         return folder.replace('_', ' ')
                     ins = process_name(datapath)
-                    # print('ins', ins)
+                    if 'batch2' in ins: ins = ins.replace(' batch2', '')
+                    if 'batch3' in ins: ins = ins.replace(' batch3', '')
+                    if 'batch4' in ins: ins = ins.replace(' batch4', '')
                 else:
-                    ins = datapath.split('/')[-3].replace('_', ' ')  # -4
+                    ins = datapath.split('/')[-3].replace('_', ' ')  # -4, -3, -2 for robotwin sim, real
                 # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
+                # print('self.language_emb', self.language_emb.keys())
                 if self.discretize:
                     # print('original action', action[:5])
                     q_action = self.quantize_action_p(action)
@@ -305,22 +315,11 @@ class InfiniteDataReader(IterableDataset):
                     # print('quantized action', q_action[:5])
                 else:
                     action_tensor = torch.tensor(action, dtype=torch.float32)
-                try:
-                    items = {
-                            'images': image_input,
-                            'encoded_language': self.language_emb[ins],
-                            'action_seq': action_tensor,
-                            'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
-                        }
-                except:
-                    task_mapping = {
-                        'lift pot new' : 'lift pot',
-                    }
-                    items = {
-                            'images': image_input,
-                            'encoded_language': self.language_emb[task_mapping[ins]],
-                            'action_seq': action_tensor,
-                            'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
+                items = {
+                        'images': image_input,
+                        'encoded_language': self.language_emb[ins],
+                        'action_seq': action_tensor,
+                        'proprio': torch.tensor(prorpio_seq[idx]).to(torch.float32)
                         }
                 yield items
                
@@ -354,7 +353,9 @@ def create_dataloader(
                  metas_path:str,
                  num_actions,
                  model_type,
-                 num_bins
+                 num_bins,
+                 pt_path,
+                 normalizer
                  ):
     return DataLoader(
             InfiniteDataReader(
@@ -363,7 +364,9 @@ def create_dataloader(
                  metas_path = metas_path,
                  num_actions = num_actions,
                  model_type = model_type,
-                 num_bins = num_bins
+                 num_bins = num_bins,
+                 pt_path = pt_path,
+                 normalizer = normalizer
                  ),
             batch_size=batch_size,
             num_workers=4,

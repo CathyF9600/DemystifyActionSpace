@@ -17,33 +17,6 @@ def basic_init(module):
         if module.bias is not None:
             nn.init.constant_(module.bias, 0)    
 
-class Normalizer(nn.Module):
-    def __init__(self, proprio_dim=14, action_dim=14, normalize_proprio=False, normalize_action=True):
-        super().__init__()
-        self.normalize_proprio = normalize_proprio
-        self.normalize_action = normalize_action
-
-        # correct shapes
-        self.register_buffer("proprio_mean", torch.zeros(proprio_dim))
-        self.register_buffer("proprio_std", torch.ones(proprio_dim))
-        self.register_buffer("action_mean", torch.zeros(action_dim))
-        self.register_buffer("action_std", torch.ones(action_dim))
-
-    def set_dataset_stats(self, mean, std):
-        self.proprio_mean.copy_(torch.tensor(mean["proprio"]))
-        self.proprio_std.copy_(torch.tensor(std["proprio"]))
-        self.action_mean.copy_(torch.tensor(mean["action"]))
-        self.action_std.copy_(torch.tensor(std["action"]))
-
-    def normalize(self, proprio, action_seq=None):
-        if self.normalize_proprio and proprio is not None:
-            proprio = (proprio - self.proprio_mean[None]) / (self.proprio_std[None] + 1e-6)
-
-        if self.normalize_action and action_seq is not None:
-            action_seq = (action_seq - self.action_mean[None, None, :]) / (self.action_std[None, None, :] + 1e-6)
-
-        return proprio, action_seq
-
 class TimeEmbedder(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256):
         super().__init__()
@@ -69,9 +42,9 @@ class TimeEmbedder(nn.Module):
         return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size))
     
 class language_encoder:
-    def __init__(self, pt_path = "lang_emd_cube_cup.pt"):
-        self.language_emb = torch.load(pt_path, map_location="cpu")
-        print(f"successfully load language hub from {pt_path}: {self.language_emb.keys()}")
+    def __init__(self, meta_path = "encoded_language.pt"):
+        self.language_emb = torch.load(meta_path, map_location="cpu")
+        print(f"successfully load language hub: {self.language_emb.keys()}")
         
     @torch.no_grad()
     def encode_language(self, language_inputs: str):
@@ -147,23 +120,18 @@ class MlpDecoder(nn.Module):
 
 class BaseModel(nn.Module):
     def __init__(self,
-                    vision_backbone = "resnet18.a1_in1k",
-                    model_type = "continuous",
-                    dim_language = 768,
-                    dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                    dim_actions = 20, # 14 for euler angles
-                    num_action_chunk = 10,
-                    action_scale = 100,
-                    num_bins = 256,
-                    depth = 3,
-                    num_views = 1,
-                    normalize_proprio = False,
-                    normalize_action = False,
+                 vision_backbone = "resnet18.a1_in1k",
+                 model_type = "continuous",
+                 dim_language = 768,
+                 dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                 dim_actions = 20, # 14 for euler angles
+                 num_action_chunk = 10,
+                 action_scale = 100,
+                 num_bins = 256,
+                 depth = 3,
                  **kwargs
                  ):
         super().__init__()
-        self.normalizer = Normalizer(proprio_dim=dim_proprio, action_dim=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
-
         self.action_scale = action_scale
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
@@ -185,7 +153,7 @@ class BaseModel(nn.Module):
                                     mlp_ratio = 4.0,
                                     dim_visual = self.vision_backbone.num_features,
                                     dim_language = dim_language,
-                                    num_views = num_views ,
+                                    num_views = 1,
                                     dim_actions = dim_actions,
                                     dim_proprio = dim_proprio,
                                     num_action_chunk = num_action_chunk,
@@ -199,8 +167,6 @@ class BaseModel(nn.Module):
                 encoded_language: torch.Tensor, # B C
                 proprio: torch.Tensor, # B C
                 action_seq: torch.Tensor):
-        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
-
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -226,7 +192,9 @@ class BaseModel(nn.Module):
                 language_feature = encoded_language,
                 proprio = proprio
             )
-
+        # if self.model_type == 'flow-matching': 
+        #     # print('output_action', output_action.shape, actions.shape)
+        #     return self.loss(output_action, action_seq)
         if self.model_type == 'discrete':
             return self.loss(output_action.view(-1, self.num_bins), action_seq.view(-1))
         else:
@@ -270,13 +238,11 @@ class BaseModel(nn.Module):
             return action_with_noise # denoised action
         return pred_action
 
-
 ## Continuous Models
 @register_model
 def model_abs_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 10,
-                pt_path = "encoded_language.pt",
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -288,7 +254,7 @@ def model_abs_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         action_scale = 100,
         num_bins = 1
     )
-    return model, language_encoder(pt_path=pt_path)
+    return model, language_encoder()
 
 @register_model
 def model_abs_ee_cnt_act30(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
@@ -329,7 +295,6 @@ def model_abs_ee_cnt_act60(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
 def model_abs_ee_cnt_mlp1(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 10,
-                pt_path = "encoded_language.pt",
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -342,7 +307,7 @@ def model_abs_ee_cnt_mlp1(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         num_bins = 1,
         depth = 1
     )
-    return model, language_encoder(pt_path=pt_path)
+    return model, language_encoder()
 
 @register_model
 def model_abs_ee_cnt_mlp6(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
@@ -410,8 +375,7 @@ def model_abs_qpos_cnt_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 100,
-        num_bins = 1,
-        num_views=3
+        num_bins = 1
     )
     return model, language_encoder()
 
@@ -596,7 +560,6 @@ def model_rel_ee_cnt_mlp9(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
 def model_rel_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
                 dim_actions = 14, # 14 for euler angles
                 num_action_chunk = 10,
-                pt_path = "encoded_language.pt",
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -608,12 +571,12 @@ def model_rel_qpos_cnt(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         action_scale = 1,
         num_bins = 1
     )
-    return model, language_encoder(pt_path=pt_path)
+    return model, language_encoder()
 
 @register_model
 def model_rel_qpos_cnt_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
                 dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 30,
+                num_action_chunk = 10,
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -623,15 +586,14 @@ def model_rel_qpos_cnt_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
         action_scale = 1,
-        num_bins = 1,
-        num_views = 3
+        num_bins = 1
     )
     return model, language_encoder()
 
 @register_model
 def model_rel_qpos_cnt_act60(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
                 dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 60,
+                num_action_chunk = 10,
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -824,23 +786,6 @@ def model_rel_ee_flow(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
 def model_rel_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
                 dim_actions = 14, # 14 for euler angles
                 num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_qpos_flow_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 30,
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",

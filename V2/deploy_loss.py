@@ -43,12 +43,10 @@ class DeployModel:
                  stats_path,
                  model_name = "model_base",
                  device = "cuda",
-                 num_bins = 1,
-                 norm_action = False
+                 num_bins = 1
                 ):
         self.device = device
         self.model_name = model_name
-        self.norm_action = norm_action
         self.model, self.lang_encoder = create_model(model_name)
         ckpt = load_file(ckpt_path)
         print(self.model.load_state_dict(ckpt, strict=False))
@@ -102,23 +100,6 @@ class DeployModel:
         # print('dequantized action:', action)
         return action
 
-    def abs_recon(self, action_seq):
-        # de-normalize 
-        action_unnorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
-        return action_unnorm
-
-    def rel_recon(self, action_seq, proprio_start):
-        # de-normalize 
-        diff_denorm = action_seq.cpu() * (self.global_std[None, :] + 1e-8) + self.global_mean[None, :]
-        diff_denorm = np.asarray(diff_denorm).reshape(-1, 20)
-        # recover absolute positions from diff
-        # print('proprio_start', diff_denorm.shape, proprio_start.shape)
-        left_xyz_start = proprio_start[:, :3]
-        left_rot6_start = proprio_start[:, 3:9]
-        left_grip_start = proprio_start[:, 10]
-        right_xyz_start = proprio_start[:, 10:13]
-        right_rot6_start = proprio_start[:, 13:19]
-        right_grip_start = proprio_start[:, 19]
     def proprio_norm(self, proprio):
         r = (proprio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
         # print('proprio', proprio.shape) (14,) or (20,)
@@ -182,7 +163,7 @@ class DeployModel:
             future_seq = np.concatenate([left_xyz, left_rot6, left_grip, right_xyz, right_rot6, right_grip], axis =-1)
 
         else:
-            print('Processing relative qpos')
+            # print('Processing relative qpos')
             diff_denorm = np.asarray(diff_denorm).reshape(-1, 14)
             left_qpos_start = proprio_start[:, :6]
             # left_grip_start = proprio_start[:, 6]
@@ -194,7 +175,7 @@ class DeployModel:
             right_qpos_del = diff_denorm[:, 7:13]
             right_grip_del = diff_denorm[:, 13:14]
 
-            print('left_qpos_del',left_qpos_del.shape, left_grip_del.shape)
+            # print('left_qpos_del',left_qpos_del.shape, left_grip_del.shape)
             left_qpos = left_qpos_start + np.cumsum(left_qpos_del, axis=0)
             right_qpos = right_qpos_start + np.cumsum(right_qpos_del, axis=0)
             future_seq = np.concatenate([left_qpos, left_grip_del, right_qpos, right_grip_del], axis =-1)
@@ -206,8 +187,6 @@ class DeployModel:
             self.model.eval()
             image_list = []        
             if "image0" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image0"]).astype(np.uint8)))
-            if "image1" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image1"]).astype(np.uint8)))
-            if "image2" in payload.keys(): image_list.append(Image.fromarray(json_numpy.loads(payload["image2"]).astype(np.uint8)))
             language_inputs  = self.lang_encoder.encode_language(payload['language_instruction']).unsqueeze(0)
             
             # raw_bytes = base64.b64decode(payload["image0"])
@@ -215,27 +194,22 @@ class DeployModel:
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
 
             proprio = np.array(json_numpy.loads(payload['proprio']))
-            if self.norm_action:
-                proprio_normed = self.proprio_norm(proprio)
-            # save lang
-            # print("proprio_normed:", proprio_normed.shape, proprio.shape)
-            # print('current proprio', proprio)
-            # print("payload['data_type']", payload['data_type'])
-
-            # proprio_norm = (propio - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-
-                inputs = {
-                    'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
-                    'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                    # 'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
-                    'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                }
-            else:
-                inputs = {
-                    'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
-                    'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
-                    'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
-                }
+            if 'proprio_norm' in payload.keys():
+                if payload['proprio_norm'] == True: 
+                    proprio_normed = self.proprio_norm(proprio)
+                    print("proprio_normed:", proprio_normed.shape, proprio.shape)
+                    inputs = {
+                        'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
+                        'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                        # 'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
+                        'proprio':  torch.tensor(proprio_normed).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                    }
+                else:
+                    inputs = {
+                        'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
+                        'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
+                        'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # raw proprio
+                    }
             
             with torch.no_grad():
                 action = self.model.pred_action(**inputs)
@@ -243,41 +217,35 @@ class DeployModel:
                 if 'dis' in self.model_name:
                         action = self.dequantize_action(action) # contain min max normalization (0, 1)
                         discrete = True
-                if 'rel' in self.model_name:
-                    # print('action', action.shape)
-                    # print('proprio', proprio.shape)
-                    action_sum = self.rel_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
-                    print('action_sum', action_sum.shape)
-                    return JSONResponse(
-                        {
-                            'action': action_sum.tolist(), 
-                            'action_sum': action_sum.tolist(),
-                            'global_mean': self.global_mean.tolist(),
-                            'global_std': self.global_std.tolist()
-                        }
-                    )
-                else:
-                    print('abs action', action.shape)
-                    # action_unnorm = self.abs_recon(action)
-                    # we do mean std un-normalization for abs
-                    if self.norm_action:
-                        action_unnorm = self.abs_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
+                if 'data_type' in payload.keys():
+                    if payload['data_type'] == 'rel':
+                        # print('action', action.shape)
+                        # print('proprio', proprio.shape)
+                        action_sum = self.rel_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
                         # print('action_sum', action_sum)
                         return JSONResponse(
                             {
-                                'action': action_unnorm.tolist(), 
-                                # 'action_unnorm': action_unnorm.tolist(),
+                                'action': action.tolist(), 
+                                'action_sum': action_sum.tolist(),
                                 'global_mean': self.global_mean.tolist(),
                                 'global_std': self.global_std.tolist()
                             }
                         )
                     else:
-                        print('action', action.shape)
+                        print('abs action', action.shape)
+                        # action_unnorm = self.abs_recon(action)
+                        # we do mean std un-normalization for abs
+                        # action_unnorm = self.abs_recon(action, proprio[None, :], discrete=discrete) # contain mean std normalization (produces a normal distribution)
+                        # print('action_sum', action_sum)
                         return JSONResponse(
                             {
-                                'action': action.tolist()
+                                'action': action.tolist(), 
+                                # 'action_unnorm': action.tolist(),
+                                # 'global_mean': self.global_mean.tolist(),
+                                # 'global_std': self.global_std.tolist()
                             }
                         )
+        
         except:  # noqa: E722
             logging.error(traceback.format_exc())
             warning_str = "Your request threw an error; make sure your request complies with the expected Dict format"
@@ -294,7 +262,6 @@ def main():
     parser = argparse.ArgumentParser(description='single-process evaluation on Calvin bench')
     parser.add_argument('--ckpt_path', type=str, help='load ckpt path')
     parser.add_argument('--model_name', default='model_base', type=str, help='load ckpt path')
-    parser.add_argument('--norm_action', default=False, type=bool, help='load ckpt path')
     parser.add_argument("--host", default='0.0.0.0', help="Your client host ip")
     parser.add_argument("--port", default=8000, type=int, help="Your client port")
     parser.add_argument("--stats_path", default='', type=str, help="Your global stats file for relative data / discrete models")
@@ -313,31 +280,13 @@ def main():
         num_bins = 256
     else:
         num_bins = 1
-    stats_path = None
-    try:
-        stats_paths = glob.glob(os.path.join(args.stats_path, "*.npz"))
-        print('Availbale stats_paths:', stats_paths)
-        for p in stats_paths:
-            if 'ee' in args.model_name and 'ee' in p:
-                if ('abs' in args.model_name and 'abs' in p) or \
-                    ('rel' in args.model_name and 'rel' in p):
-                    stats_path = p
-                    break
-            elif 'qpos' in args.model_name and 'qpos' in p:
-                if ('abs' in args.model_name and 'abs' in p) or \
-                    ('rel' in args.model_name and 'rel' in p):
-                    stats_path = p
-                    break
-                
-    except:
-        stats_path = None
-    print('FOUND stats_path:', stats_path)
+
+    # print('FOUND stats_path:', stats_path)
     server = DeployModel(
         ckpt_path = ckpt_path,
         model_name = args.model_name,
-        stats_path = stats_path,
-        num_bins = num_bins,
-        norm_action = args.norm_action
+        stats_path = args.stats_path,
+        num_bins = num_bins
     )  
     server.run(host=kwargs['host'], port=kwargs['port'])
     

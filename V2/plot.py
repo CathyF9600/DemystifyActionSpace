@@ -144,6 +144,12 @@ def rot6_to_euler(rot6, seq="xyz"):
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
     return R.from_quat(q).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
 
+def cal_delta_rotate(q1, q2):
+    q1 = R.from_quat(q1)
+    q2 = R.from_quat(q2)
+    del_rotate = q1 * q2.inv()
+    return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
+
 
 def minmax_normalize(action, global_min, global_max):
     action = (action - global_min[None, :]) / (global_max[None, :] - global_min[None, :] + 1e-8)
@@ -197,83 +203,93 @@ def plot_tsne(actions, save_path, perplexity=30, max_iter=1000, pca_dim=50):
     plt.close()
     print(f"Saved t-SNE plot to {save_path}")
 
-
-from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+from sklearn.decomposition import PCA
 import os
 
-def plot_pca(actions, save_path, pca_dim=2):
+def plot_loss_landscape(loss_dict, save_path=None, task=None, args=None):
     """
-    actions: (N, D) array
-    save_path: path to save the PCA plot
+    loss_dict: dict with keys = flattened tuples of noise actions
+               values = scalar losses
+    save_path: optional path to save the plot
+    task: string, task name
+    args: argparse.Namespace or similar, containing ctrl_interface
     """
-    print(f"Running PCA -> {pca_dim} dims...")
-    actions_reduced = PCA(n_components=pca_dim).fit_transform(actions)
+    # Convert keys (tuples) back into numpy arrays
+    actions = np.array([np.array(k).reshape(-1) for k in loss_dict.keys()])
+    losses = np.array(list(loss_dict.values()))
+    print('actions dim before pca:', actions.shape)
 
-    plt.figure(figsize=(6,6))
-    plt.scatter(actions_reduced[:,0], actions_reduced[:,1], s=2, alpha=0.5)
-    plt.title("PCA Projection")
-    plt.xlabel("PCA dim 1")
-    plt.ylabel("PCA dim 2")
-    os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    plt.savefig(save_path, dpi=300)
-    plt.close()
-    print(f"Saved PCA plot to {save_path}")
+    # ---- Mean and Std of Loss ----
+    loss_mean = float(np.mean(losses))
+    loss_std = float(np.std(losses))
+    print(f"[{task}] Loss mean: {loss_mean:.6f}, std: {loss_std:.6f}")
+
+    # Reduce to 2D with PCA
+    pca = PCA(n_components=2)
+    actions_2d = pca.fit_transform(actions)
+
+    # Plot
+    plt.figure(figsize=(7, 6))
+    sc = plt.scatter(actions_2d[:, 0], actions_2d[:, 1], c=losses, cmap="viridis", s=50)
+    plt.colorbar(sc, label="Huber Loss")
+    plt.xlabel("PCA Dimension 1")
+    plt.ylabel("PCA Dimension 2")
+    plt.title(f"Loss Landscape (PCA 2D) {task} ({args.ctrl_interface})\n"
+              f"Mean={loss_mean:.4f}, Std={loss_std:.4f}")
+
+    # Save or show
+    if save_path:
+        os.makedirs(os.path.dirname(save_path), exist_ok=True)
+        plt.savefig(save_path, bbox_inches="tight")
+        plt.close()
+        print(f"Saved loss landscape plot to {save_path}")
+    else:
+        plt.show()
+
+    return loss_mean, loss_std
 
 
-def cal_delta_rotate(q1, q2):
-    q1 = R.from_quat(q1)
-    q2 = R.from_quat(q2)
-    del_rotate = q1 * q2.inv()
-    return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
+def huber_loss_vectorized(pred, target, delta=1.0):
+    """
+    Vectorized Huber loss, element-wise.
 
+    Args:
+        pred: np.ndarray, predictions
+        target: np.ndarray, ground truth (same shape as pred)
+        delta: float, Huber loss delta
 
-def huber_loss(y_true, y_pred, delta=1.0):
-    error = y_true - y_pred
+    Returns:
+        np.ndarray of same shape as pred, element-wise loss
+    """
+    error = pred - target
     abs_error = np.abs(error)
     quadratic = np.minimum(abs_error, delta)
-    linear = abs_error - quadratic
-    loss = 0.5 * quadratic**2 + delta * linear
-    return np.mean(loss, axis=(1, 2))  # average over horizon (10) and action dim (20)
+    # smooth L1 / Huber formula
+    loss = 0.5 * quadratic**2 + delta * (abs_error - quadratic)
+    return loss
 
-def plot_loss(loss):
-    return
+def huber_loss(pred, target, delta=1.0, reduction="mean"):
+    """
+    Reduced Huber loss.
 
-def get_loss(pred_actions, gt):
-    # input: action: (N-1, 10, 20), gt (N, 20) 
-    # get loss between actions[i-1, j, 0] and gt[i, :] (the prediction made by (i-1)th sequence's j-th action for j in [i, i+10]
-    # output: loss: dict - key: action (20,), value: loss (np.float)
-    N_minus_1, horizon, dim = pred_actions.shape
+    Args:
+        pred: np.ndarray, predictions
+        target: np.ndarray, ground truth (same shape as pred)
+        delta: float, Huber loss delta
+        reduction: "mean" | "sum" | "none"
 
-    # build gt chunks, but truncate at the end
-    gt_chunks = np.zeros_like(pred_actions)  # placeholder
-    mask = np.zeros((N_minus_1, horizon), dtype=bool)
+    Returns:
+        float or np.ndarray
+    """
+    loss = huber_loss_vectorized(pred, target, delta)
+    if reduction == "mean":
+        return np.mean(loss)
+    elif reduction == "sum":
+        return np.sum(loss)
+    else:
+        return loss 
 
-    for i in range(N_minus_1):
-        end = min(N_minus_1+1, i+1+horizon)
-        gt_chunk = gt[i+1:end]
-        gt_chunks[i, :len(gt_chunk)] = gt_chunk
-        mask[i, :len(gt_chunk)] = True
-
-    # compute huber loss for all
-    losses_all = huber_loss_vectorized(pred_actions, gt_chunks, delta)  # (N-1,)
-
-    # mask out invalid positions by recomputing only where mask=True
-    losses = {}
-    for i in range(N_minus_1):
-        valid = mask[i]
-        if np.any(valid):
-            losses[i] = float(
-                huber_loss(
-                    pred_actions[i:i+1, valid],
-                    gt_chunks[i:i+1, valid],
-                    delta
-                )[0]
-            )
-        else:
-            losses[i] = None  # no valid gt
-    
-    return losses
 
 
 def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_actions=10, model_type="continuous", num_bins=256, normalize=True, compute_loss=False, args=None):
@@ -307,9 +323,16 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
     if normalize:
         # print('min max normalizing')
         print('min', global_min, 'max', global_max)
+    loss_dict = {}
+    task_dict = {} # task_name -> loss_dict
+
+    folder_name_prev = 'adjust_bottle'
     for datapath in datalist:
         # get parent directory name
         folder_name = os.path.basename(os.path.dirname(os.path.dirname(datapath)))
+        if folder_name_prev != folder_name:
+            task_dict[folder_name_prev] = loss_dict
+            loss_dict = {}
         # replace underscores with spaces
         task_name = folder_name.replace("_", " ")
 
@@ -414,33 +437,39 @@ def collect_all_actions(metas_path, stats_file=None, field="action_seq", num_act
             else:
                 raise NotImplementedError(f"Dataset type {dataset_name} not handled yet")
 
-            print('proprio', proprio.shape)
+            # print('proprio', proprio.shape)
             action_seq = proprio[1:]
             collected.append(action_seq)
 
             if compute_loss:
-                for idx in range(proprio.shape[0]): # (139, 20)
-                    print("images[idx]", type(images[idx]))
+                for idx in range(0, proprio.shape[0]-11, 10): # (139, 20) idx: [0, 130]
+                    # print("images[idx]", type(images[idx]))
                     image_input = np.array(decode_image_from_bytes(images[idx]))
-                    print('image_input type', type(image_input))
-                    proprio_input = proprio[0]
-                    print('proprio_input', proprio_input.shape)
+                    # print('image_input type', type(image_input))
+                    proprio_input = proprio[idx]
+                    # print('proprio_input', proprio_input.shape)
                     # instruction = args["task_name"].replace('_', ' ') # np.random.choice(results[0][instruction_type])
                     query = {
                         # "proprio": json_numpy.dumps(np.zeros_like(self.proprio)), #.reshape(1,-1),  # (1, 14)
                         "proprio": json_numpy.dumps(proprio_input),
                         "language_instruction": task_name,
                         "image0": json_numpy.dumps(image_input),
-                        "data_type": data_type
+                        "data_type": data_type,
+                        "proprio_norm": False
                         # "image1": json_numpy.dumps(left_view),
                         # "image2": json_numpy.dumps(right_view)
                     }
 
                     response = requests.post(url, json=query).json()
                     noise_action = np.array(response['action']).squeeze(0)
-                    print('noise_action', noise_action.shape)
-                    loss = get_loss(noise_action)
-                    plot_loss(loss)
+                    # print('noise_action', noise_action.shape)
+                    loss = huber_loss(noise_action,proprio[idx:idx+10])
+                    loss_dict[tuple(noise_action.flatten())] = loss  # (10, 20)
+                    
+        folder_name_prev = folder_name
+    task_dict[folder_name_prev] = loss_dict # adding the last task
+    for key in task_dict:
+        plot_loss_landscape(task_dict[key], save_path=f'/home/fyc/EmpiricalStudyForVLA/V2/plots/{args.ctrl_interface}/loss_landscape_{key}.png', task=key, args=args)
             
     collected = np.concatenate(collected, axis=0)  # (N, 3)
     # rot6_all = np.concatenate(rot6_all, axis=0)  # (N, 6)
@@ -588,45 +617,45 @@ def main(plot_tsne=False, plot_correspondence=False, compute_loss=True):
     parser = argparse.ArgumentParser(description='single-process evaluation on Calvin bench')
     parser.add_argument("--host", default='0.0.0.0', help="Your client host ip")
     parser.add_argument("--port", default=8000, type=int, help="Your client port")
+    parser.add_argument("--ctrl_interface", default='abs_ee', type=str, help="Your client port")
+
     # parser.add_argument("--stats_path", default='', type=str, help="Your global stats file for relative data / discrete models")
     args = parser.parse_args()
 
-    name = 'abs_ee'
-    data_type = 'abs'
-    # Example usage
-    stats_file = None
-    metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
+    name = args.ctrl_interface # 'abs_qpos' 'rel_qpos' 'abs_ee' 'rel_ee'
+    data_type = name[:3]
+    metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-10.jsonl"
     save_folder = "distributions"
-    stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_" + data_type + ".npz"
+    stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-10_global_stats_" + data_type + ".npz"
     print('stats_file', stats_file)
     eef_all = collect_all_actions(metas_path, stats_file, compute_loss=True, args=args)
-    print('eef_all[:, :3]', eef_all[:, :3].shape)
-    eef_euler = np.concatenate([
-        eef_all[:, :3],
-        rot6_to_euler(eef_all[:, 3:9]),                        # (T,7)
-        eef_all[:, 10][:, None],             # (T,1)
-        eef_all[:, 10:13],
-        rot6_to_euler(eef_all[:, 13:19]),                       # (T,7)
-        eef_all[:, 19][:, None]           # (T,1)
-    ], axis=-1)
+    # print('eef_all[:, :3]', eef_all[:, :3].shape)
+    # eef_euler = np.concatenate([
+    #     eef_all[:, :3],
+    #     rot6_to_euler(eef_all[:, 3:9]),                        # (T,7)
+    #     eef_all[:, 10][:, None],             # (T,1)
+    #     eef_all[:, 10:13],
+    #     rot6_to_euler(eef_all[:, 13:19]),                       # (T,7)
+    #     eef_all[:, 19][:, None]           # (T,1)
+    # ], axis=-1)
 
-    name = 'abs_qpos'
-    # Example usage
-    stats_file = None
-    metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10.jsonl"
-    save_folder = "distributions"
-    stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-50-10_global_stats_" + data_type + ".npz"
-    print('stats_file', stats_file)
-    qpos_all = collect_all_actions(metas_path, stats_file, compute_loss=True, args=args)
+    # name = args.control_interface # 'abs_qpos' 'rel_qpos' 'abs_ee' 'rel_ee'
+    # data_type = name[:3]
+    # stats_file = None
+    # metas_path = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-10.jsonl"
+    # save_folder = "distributions"
+    # stats_file = "/home/fyc/EmpiricalStudyForVLA/datasets/meta_files/" + name + "_single_camera-10_global_stats_" + data_type + ".npz"
+    # print('stats_file', stats_file)
+    # qpos_all = collect_all_actions(metas_path, stats_file, compute_loss=True, args=args)
 
-    qpos_ent, qpos_gau = compute_entropy(qpos_all)
-    print('qpos entropy', qpos_ent, qpos_gau)    
-    ee_ent0, ee_gau = compute_entropy(eef_all)
-    print('ee entropy', ee_ent0, ee_gau)
-    ee_ent, ee_gau = compute_entropy(eef_euler)
-    print('eef_euler entropy', ee_ent, ee_gau)
-    plot_entropy_bar(ee_ent, qpos_ent, data_type, "entropy_bar_" + data_type + ".png")
-    plot_entropy_heatmap(ee_ent, qpos_ent, "entropy_heatmap_" + data_type + ".png")
+    # qpos_ent, qpos_gau = compute_entropy(qpos_all)
+    # print('qpos entropy', qpos_ent, qpos_gau)    
+    # ee_ent0, ee_gau = compute_entropy(eef_all)
+    # print('ee entropy', ee_ent0, ee_gau)
+    # ee_ent, ee_gau = compute_entropy(eef_euler)
+    # print('eef_euler entropy', ee_ent, ee_gau)
+    # plot_entropy_bar(ee_ent, qpos_ent, data_type, "entropy_bar_" + data_type + ".png")
+    # plot_entropy_heatmap(ee_ent, qpos_ent, "entropy_heatmap_" + data_type + ".png")
 
     if plot_correspondence:
         plot_qpos_eef_correspondence(qpos_all, eef_euler, save_path=save_folder + "/qpos_eef_correspondence.png")
