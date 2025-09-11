@@ -291,7 +291,7 @@ class InfiniteDataReader(IterableDataset):
                     if 'batch3' in ins: ins = ins.replace(' batch3', '')
                     if 'batch4' in ins: ins = ins.replace(' batch4', '')
                 else:
-                    ins = datapath.split('/')[-3].replace('_', ' ')  # -4, -3, -2 for robotwin sim, real
+                    ins = datapath.split('/')[-5].replace('_', ' ')  # -4, -3, -2 for robotwin clean, sim, real
                 # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
                 action = action_seq[idx:idx+self.num_actions]
@@ -332,19 +332,6 @@ class InfiniteDataReader(IterableDataset):
                         generators[i] = self.get_generator(dataset_names[i], int(idx[i]))
                         return get_next_item()
                 yield get_next_item()
-
-class ACTWrapperDataset(torch.utils.data.IterableDataset):
-    def __init__(self, base_dataset, max_action_len):
-        self.base_dataset = base_dataset
-        self.max_action_len = max_action_len
-
-    def __iter__(self):
-        for items in self.base_dataset:
-            image_data = items['images']              # (cams, C, H, W)
-            qpos_data = items['proprio']              # (proprio_dim,)
-            action_data = items['action_seq']
-
-            yield image_data, qpos_data, action_data, is_pad
 
 def create_dataloader(
                  rank:int,

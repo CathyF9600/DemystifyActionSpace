@@ -10,9 +10,8 @@ import torch.backends.cudnn as cudnn
 from pathlib import Path
 import subprocess
 from accelerate import Accelerator
-from dataset import create_dataloader, create_act_dataloader
+from dataset import create_dataloader
 import model
-from act_policy import ACTPolicy
 from timm import create_model
 from safetensors.torch import load_file
 from accelerate.utils import DistributedDataParallelKwargs
@@ -63,35 +62,7 @@ def get_args_parser():
     parser.add_argument('--normalize_action', default=False, action='store_true', help='load ckpt path')
     parser.add_argument('--normalize_proprio', default=False, action='store_true', help='load ckpt path')
 
-    # # ACT
-    # parser.add_argument("--eval", action="store_true")
-    # parser.add_argument("--onscreen_render", action="store_true")
-    # parser.add_argument("--ckpt_dir", action="store", type=str, help="ckpt_dir", required=True)
-    # parser.add_argument(
-    #     "--policy_class",
-    #     action="store",
-    #     type=str,
-    #     help="policy_class, capitalize",
-    #     required=True,
-    # )
-    # parser.add_argument("--task_name", action="store", type=str, help="task_name", required=True)
-    # parser.add_argument("--batch_size", action="store", type=int, help="batch_size", required=True)
-    # # parser.add_argument("--seed", action="store", type=int, help="seed", required=True)
-    # parser.add_argument("--num_epochs", action="store", type=int, help="num_epochs", required=True)
-    # parser.add_argument("--lr", action="store", type=float, help="lr", required=True)
 
-    # # for ACT
-    # parser.add_argument("--kl_weight", action="store", type=int, help="KL Weight", required=False)
-    # parser.add_argument("--chunk_size", action="store", type=int, help="chunk_size", required=False)
-    # parser.add_argument("--hidden_dim", action="store", type=int, help="hidden_dim", required=False)
-    # parser.add_argument(
-    #     "--dim_feedforward",
-    #     action="store",
-    #     type=int,
-    #     help="dim_feedforward",
-    #     required=False,
-    # )
-    # parser.add_argument("--temporal_agg", action="store_true")
     return parser
 
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
@@ -201,14 +172,7 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             right_delta_rot6d,
                             right_grip[1:, None]
                         ], axis=-1)
-                        action_seq = np.concatenate([
-                            left_delta_xyz,
-                            left_delta_rot6d,
-                            left_grip[1:, None],
-                            right_delta_xyz,
-                            right_delta_rot6d,
-                            right_grip[1:, None]
-                        ], axis=-1)
+
             if data_type == 'abs':
                 if control == 'qpos':
                     if env == 'real':
@@ -225,7 +189,7 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             right_joint,
                             right_grip[:, None]
                         ], axis=-1)
-                        proprio_seq = np.concatenate([left_joint, right_joint], axis=-1)
+                        proprio_seq = action_seq
                 else: # ee
                     if env == 'real':
                         action_seq = data['observations/eef_6d'][()] # 实机
@@ -281,29 +245,6 @@ def get_hdf5s(metas_path):
             metas[meta['dataset_name']] = meta
     return meta['datalist']
 
-def make_policy(policy_class):
-    if policy_class == "ACT":
-        from constants import SIM_TASK_CONFIGS
-        policy_config = {
-            "lr": 1e-5,
-            "num_queries": 50, #args.chunk_size,
-            "kl_weight": 10,
-            "hidden_dim": 512,
-            "dim_feedforward": 3200,
-            "lr_backbone": 1e-5,
-            "backbone": "resnet18",
-            "enc_layers": 4,
-            "dec_layers": 7,
-            "nheads": 8,
-        }
-
-        SIM_TASK_CONFIGS["policy_config"] = policy_config
-        print(">>> Create ACT Policy", SIM_TASK_CONFIGS)
-
-        policy = ACTPolicy(args_override=SIM_TASK_CONFIGS)
-    else:
-        raise NotImplementedError
-    return policy
 
 def main(args):
     output_dir = Path(args.output_dir)
@@ -330,17 +271,15 @@ def main(args):
             data_type = 'rel'
         else:
             data_type = 'abs'
-        stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
-        print('Saving stats_file', args.train_metas_path, stats_file)
-        print('Processing stats for', args.model_type, data_type, control)
+        # stats_file = args.train_metas_path.replace(".jsonl", "_global_stats_" + data_type + ".npz")
+        # print('Saving stats_file', args.train_metas_path, stats_file)
+        # print('Processing stats for', args.model_type, data_type, control)
         if 'real' in args.wandb_name:
             env = 'real'
         else:
             env = 'sim'
-    if 'ACT' in args.model_type:
-        model = make_policy('ACT')
-    else:
-        model, _ = create_model(args.model, proprio_dim=proprio_dim, action_dim=proprio_dim, normalize_proprio=args.normalize_proprio, normalize_action=args.normalize_action)
+
+    model, _ = create_model(args.model, proprio_dim=proprio_dim, action_dim=proprio_dim, normalize_proprio=args.normalize_proprio, normalize_action=args.normalize_action)
     if args.pretrained is not None:
         accelerator.print('>>>>>> load pretrain from {}'.format(args.pretrained))
         print(model.load_state_dict(load_file(args.pretrained), strict=False))
@@ -368,24 +307,13 @@ def main(args):
         num_bins=args.num_bins,
         pt_path = args.pt_path,
     ))
-    # else:
-    #     train_dataloader = create_act_dataloader(
-    #         rank = args.rank,
-    #         world_size = args.world_size,
-    #         batch_size = args.batch_size,
-    #         metas_path = args.train_metas_path,
-    #         num_actions= 50,
-    #         model_type=args.model_type,
-    #         num_bins=args.num_bins,
-    #         pt_path = args.pt_path,
-    #     )
     
     model = model.to(torch.float32)
     # 设置优化器参数组
     optim = torch.optim.AdamW(
         model.parameters(), 
         lr=args.learning_rate,
-        betas=(0.9, 0.999),
+        betas=(0.9, 0.99),
         weight_decay=args.weight_decay
     )
     

@@ -10,7 +10,6 @@ import math
 
 print("model init")
 
-
 def basic_init(module):
     if isinstance(module, nn.Linear):
         torch.nn.init.xavier_uniform_(module.weight)
@@ -36,6 +35,7 @@ class Normalizer(nn.Module):
         self.action_std.copy_(torch.tensor(std["action"]))
 
     def normalize(self, proprio, action_seq=None):
+        print("self.normalize_proprio", self.normalize_proprio, "self.normalize_action", self.normalize_action)
         if self.normalize_proprio and proprio is not None:
             proprio = (proprio - self.proprio_mean[None]) / (self.proprio_std[None] + 1e-6)
 
@@ -43,6 +43,10 @@ class Normalizer(nn.Module):
             action_seq = (action_seq - self.action_mean[None, None, :]) / (self.action_std[None, None, :] + 1e-6)
 
         return proprio, action_seq
+    
+    def denormalize(self, action_seq):
+        action_seq = action_seq * (self.action_std[None, None, :] + 1e-6) + self.action_mean[None, None, :]
+        return action_seq
 
 class TimeEmbedder(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256):
@@ -153,8 +157,8 @@ class BaseModel(nn.Module):
                     dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                     dim_actions = 20, # 14 for euler angles
                     num_action_chunk = 10,
-                    action_scale = 100,
-                    num_bins = 256,
+                    action_scale = 1,
+                    num_bins = 1,
                     depth = 3,
                     num_views = 1,
                     normalize_proprio = False,
@@ -239,7 +243,7 @@ class BaseModel(nn.Module):
                 steps = 5
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
-        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
+        proprio, _ = self.normalizer.normalize(proprio, action_seq=None)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -268,7 +272,8 @@ class BaseModel(nn.Module):
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
                 action_with_noise = action_with_noise - (action_with_noise - pred_action / self.action_scale) / time.view(B, 1, 1) / steps
-            return action_with_noise # denoised action
+            denorm_output = self.normalizer.denormalize(action_with_noise)
+            return denorm_output # denoised action
         return pred_action
 
 def get_positional_embeddings(seq_length, d_model):
@@ -280,7 +285,7 @@ def get_positional_embeddings(seq_length, d_model):
     pe = pe.unsqueeze(0)
     return pe
 
-class ACT_Decoder(nn.Module):
+class ACT(nn.Module):
     def __init__(self,
                 hidden_dim = 512,
                 dim_proprio = 20, # 14 for euler angles, 20 for rot6d
@@ -290,7 +295,7 @@ class ACT_Decoder(nn.Module):
                 vision_backbone = "resnet18.a1_in1k",
                 dim_language = 768,
 
-                action_scale = 100,
+                action_scale = 1,
                 num_views = 1,
                 normalize_proprio = False,
                 normalize_action = False
@@ -359,7 +364,7 @@ class ACT_Decoder(nn.Module):
                 proprio: torch.Tensor,
                 steps = 5
             ):
-        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
+        proprio, _ = self.normalizer.normalize(proprio, action_seq=None)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -377,19 +382,106 @@ class ACT_Decoder(nn.Module):
         
         output = self.model.forward(inputs, query) # B ac hidden
         output = self.action_head(output) 
-        return output
-        
+        denorm_output = self.normalizer.denormalize(output)
+        return denorm_output
+
 @register_model
 def ACT_3RGB_14DoFs_14Proprio_chunk30(pt_path = "encoded_language.pt",
                                         **kwargs):
-    return ACT_Decoder(dim_proprio = 14,
-                dim_actions = 14), language_encoder(pt_path=pt_path)
+    return ACT(dim_proprio = 14,
+                dim_actions = 14,
+                normalize_proprio = True,
+                normalize_action = True), language_encoder(pt_path=pt_path)
 
 @register_model
 def ACT_3RGB_20DoFs_20Proprio_chunk30(pt_path = "encoded_language.pt",
                                         **kwargs):
-    return ACT_Decoder(dim_proprio = 20,
-                dim_actions = 20), language_encoder(pt_path=pt_path)
+    return ACT(dim_proprio = 20,
+                dim_actions = 20,
+                normalize_proprio = True,
+                normalize_action = True), language_encoder(pt_path=pt_path)
+
+
+@register_model
+def model_abs_ee_flow_chunk30(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 30,
+                **kwargs):
+    return BaseModel(model_type = "flow-matching",
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        normalize_proprio = True,
+        normalize_action = True), language_encoder()
+
+@register_model
+def model_abs_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "flow-matching",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        num_bins = 1
+    )
+    return model, language_encoder()
+
+@register_model
+def model_rel_ee_flow(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "flow-matching",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 1,
+        num_bins = 1
+    )
+    return model, language_encoder()
+
+@register_model
+def model_rel_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 10,
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "flow-matching",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 1,
+        num_bins = 1
+    )
+    return model, language_encoder()
+
+@register_model
+def model_rel_qpos_flow_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 30,
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "flow-matching",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 1,
+        num_bins = 1
+    )
+    return model, language_encoder()
+
 
 ## Continuous Models
 @register_model
@@ -610,129 +702,6 @@ def model_abs_qpos_cnt_mlp9(dim_proprio = 14, # 14 for euler angles, 20 for rot6
 def model_rel_ee_cnt(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_act30(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 30,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_act60(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 60,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_mlp1(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1,
-        depth = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_mlp6(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1,
-        depth = 6
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_mlp9(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1,
-        depth = 9
-    )
-    return model, language_encoder()
-
-
-@register_model
-def model_rel_ee_cnt_act30(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 30,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_cnt_act60(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 60,
                 **kwargs):
     model = BaseModel(
         vision_backbone = "resnet18.a1_in1k",
@@ -977,92 +946,6 @@ def model_rel_qpos_dis(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
         num_bins = 256
     )
     return model, language_encoder()
-
-@register_model
-def model_abs_ee_flow(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_abs_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_ee_flow(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_qpos_flow(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 10,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
-@register_model
-def model_rel_qpos_flow_act30(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 30,
-                **kwargs):
-    model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "flow-matching",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 1,
-        num_bins = 1
-    )
-    return model, language_encoder()
-
 
 
 # if __name__ == "__main__":
