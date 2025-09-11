@@ -348,39 +348,37 @@ def main(args):
     accelerator.print(f'number of params: {n_parameters} M')
 
     stats = compute_mean_std(hdf5_files, control=control, data_type=data_type, env=env)
-    if args.model_type != 'ACT':
-        model.normalizer.set_dataset_stats(
-            mean={
-                "proprio": stats["proprio"]["mean"],
-                "action": stats["action"]["mean"],
-            },
-            std={
-                "proprio": stats["proprio"]["std"],
-                "action": stats["action"]["std"],
-            }
-        )
-        train_dataloader = iter(create_dataloader(
-            rank = args.rank,
-            world_size = args.world_size,
-            batch_size = args.batch_size,
-            metas_path = args.train_metas_path,
-            num_actions= model.num_action_chunk,
-            model_type=args.model_type,
-            num_bins=args.num_bins,
-            pt_path = args.pt_path,
-            normalizer = model.normalizer
-        ))
-    else:
-        train_dataloader = create_act_dataloader(
-            rank = args.rank,
-            world_size = args.world_size,
-            batch_size = args.batch_size,
-            metas_path = args.train_metas_path,
-            num_actions= 50,
-            model_type=args.model_type,
-            num_bins=args.num_bins,
-            pt_path = args.pt_path,
-        )
+    model.normalizer.set_dataset_stats(
+        mean={
+            "proprio": stats["proprio"]["mean"],
+            "action": stats["action"]["mean"],
+        },
+        std={
+            "proprio": stats["proprio"]["std"],
+            "action": stats["action"]["std"],
+        }
+    )
+    train_dataloader = iter(create_dataloader(
+        rank = args.rank,
+        world_size = args.world_size,
+        batch_size = args.batch_size,
+        metas_path = args.train_metas_path,
+        num_actions= model.num_action_chunk,
+        model_type=args.model_type,
+        num_bins=args.num_bins,
+        pt_path = args.pt_path,
+    ))
+    # else:
+    #     train_dataloader = create_act_dataloader(
+    #         rank = args.rank,
+    #         world_size = args.world_size,
+    #         batch_size = args.batch_size,
+    #         metas_path = args.train_metas_path,
+    #         num_actions= 50,
+    #         model_type=args.model_type,
+    #         num_bins=args.num_bins,
+    #         pt_path = args.pt_path,
+    #     )
     
     model = model.to(torch.float32)
     # 设置优化器参数组

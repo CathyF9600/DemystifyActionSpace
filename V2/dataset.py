@@ -371,27 +371,5 @@ def create_dataloader(
             pin_memory=True
     )
 
-def create_act_dataloader(
-                 rank:int,
-                 world_size:int,
-                 batch_size: int,
-                 metas_path:str,
-                 num_actions,
-                 model_type,
-                 num_bins,
-                 pt_path
-                 ):
-    return ACTWrapperDataset(            
-                InfiniteDataReader(
-                 rank = rank,
-                 world_size = world_size,
-                 metas_path = metas_path,
-                 num_actions = num_actions,
-                 model_type = model_type,
-                 num_bins = num_bins,
-                 pt_path = pt_path
-                ), 
-            max_action_len=50
-    )  # pick same as ACT config
 
     

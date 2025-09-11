@@ -18,16 +18,16 @@ def basic_init(module):
             nn.init.constant_(module.bias, 0)    
 
 class Normalizer(nn.Module):
-    def __init__(self, proprio_dim=14, action_dim=14, normalize_proprio=False, normalize_action=True):
+    def __init__(self, dim_proprio=14, dim_actions=14, normalize_proprio=False, normalize_action=True):
         super().__init__()
         self.normalize_proprio = normalize_proprio
         self.normalize_action = normalize_action
 
         # correct shapes
-        self.register_buffer("proprio_mean", torch.zeros(proprio_dim))
-        self.register_buffer("proprio_std", torch.ones(proprio_dim))
-        self.register_buffer("action_mean", torch.zeros(action_dim))
-        self.register_buffer("action_std", torch.ones(action_dim))
+        self.register_buffer("proprio_mean", torch.zeros(dim_proprio))
+        self.register_buffer("proprio_std", torch.ones(dim_proprio))
+        self.register_buffer("action_mean", torch.zeros(dim_actions))
+        self.register_buffer("action_std", torch.ones(dim_actions))
 
     def set_dataset_stats(self, mean, std):
         self.proprio_mean.copy_(torch.tensor(mean["proprio"]))
@@ -162,7 +162,7 @@ class BaseModel(nn.Module):
                  **kwargs
                  ):
         super().__init__()
-        self.normalizer = Normalizer(proprio_dim=dim_proprio, action_dim=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
+        self.normalizer = Normalizer(dim_proprio=dim_proprio, dim_actions=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
 
         self.action_scale = action_scale
         self.model_type = model_type
@@ -239,6 +239,7 @@ class BaseModel(nn.Module):
                 steps = 5
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -270,7 +271,125 @@ class BaseModel(nn.Module):
             return action_with_noise # denoised action
         return pred_action
 
+def get_positional_embeddings(seq_length, d_model):
+    position = torch.arange(0, seq_length, dtype=torch.float).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+    pe = torch.zeros(seq_length, d_model)
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    pe = pe.unsqueeze(0)
+    return pe
 
+class ACT_Decoder(nn.Module):
+    def __init__(self,
+                hidden_dim = 512,
+                dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 30,
+
+                vision_backbone = "resnet18.a1_in1k",
+                dim_language = 768,
+
+                action_scale = 100,
+                num_views = 1,
+                normalize_proprio = False,
+                normalize_action = False
+                ):
+
+        super().__init__()
+        self.action_scale = action_scale
+        self.normalizer = Normalizer(dim_proprio=dim_proprio, dim_actions=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
+        self.num_action_chunk = num_action_chunk
+        self.proprio_proj = nn.Linear(dim_proprio, hidden_dim)
+        self.lang_proj = nn.Linear(dim_language, hidden_dim)
+        
+        self.vision_backbone = create_model(vision_backbone, pretrained=False)
+        del self.vision_backbone.fc
+
+        self.action_head = nn.Sequential(
+                nn.LayerNorm(hidden_dim),
+                nn.Linear(hidden_dim, dim_actions))
+        
+        self.queries = nn.Parameter(torch.zeros(1, num_action_chunk, hidden_dim), requires_grad=True)
+        self.queries_pos_emb = nn.Parameter(get_positional_embeddings(num_action_chunk, hidden_dim), requires_grad=False)
+        self.input_pos_emb = nn.Parameter(get_positional_embeddings(49*num_views+2, hidden_dim), requires_grad=False)
+
+        assert hidden_dim % 64 == 0
+        self.model = nn.Transformer(
+            d_model=hidden_dim,
+            nhead=hidden_dim//64,
+            num_encoder_layers = 4,
+            num_decoder_layers = 2,
+            dim_feedforward = hidden_dim * 4,
+            dropout = 0.0,
+            batch_first = True,
+            norm_first = False,
+        )
+        self.loss = nn.HuberLoss(delta=0.1)
+
+    def forward(self, 
+                images: torch.Tensor,  # B V N C
+                encoded_language: torch.Tensor, # B, ua_dim
+                proprio: torch.Tensor, # B, prio_dim
+                action_seq: torch.Tensor):
+        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
+        B, V, C, H, W = images.shape
+        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
+        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
+        _, num_features, N = vision_embedding.shape
+        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
+
+        inputs = torch.cat(
+            [
+                vision_embedding.flatten(start_dim=1, end_dim=2),
+                self.lang_proj(encoded_language).unsqueeze(1),
+                self.proprio_proj(proprio).unsqueeze(1)
+            ], dim = 1
+        )
+        inputs = inputs + self.input_pos_emb
+        query = self.queries.repeat(B, 1, 1) + self.queries_pos_emb
+        
+        output = self.model.forward(inputs, query) # B ac hidden
+        output = self.action_head(output) # B ac 14
+        return self.loss(output, action_seq * self.action_scale)
+
+    def pred_action(self,
+                images: torch.Tensor, # B V C H W
+                encoded_language: torch.Tensor, # B C
+                proprio: torch.Tensor,
+                steps = 5
+            ):
+        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
+        B, V, C, H, W = images.shape
+        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
+        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
+        _, num_features, N = vision_embedding.shape
+        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
+        inputs = torch.cat(
+                    [
+                        vision_embedding.flatten(start_dim=1, end_dim=2),
+                        self.lang_proj(encoded_language).unsqueeze(1),
+                        self.proprio_proj(proprio).unsqueeze(1)
+                    ], dim = 1
+                )
+        inputs = inputs + self.input_pos_emb
+        query = self.queries.repeat(B, 1, 1) + self.queries_pos_emb
+        
+        output = self.model.forward(inputs, query) # B ac hidden
+        output = self.action_head(output) 
+        return output
+        
+@register_model
+def ACT_3RGB_14DoFs_14Proprio_chunk30(pt_path = "encoded_language.pt",
+                                        **kwargs):
+    return ACT_Decoder(dim_proprio = 14,
+                dim_actions = 14), language_encoder(pt_path=pt_path)
+
+@register_model
+def ACT_3RGB_20DoFs_20Proprio_chunk30(pt_path = "encoded_language.pt",
+                                        **kwargs):
+    return ACT_Decoder(dim_proprio = 20,
+                dim_actions = 20), language_encoder(pt_path=pt_path)
 
 ## Continuous Models
 @register_model
