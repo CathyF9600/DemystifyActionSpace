@@ -52,7 +52,7 @@ class TimeEmbedder(nn.Module):
         return self.mlp(self.timestep_embedding(t, self.frequency_embedding_size))
     
 class language_encoder:
-    def __init__(self, meta_path = "encoded_language.pt"):
+    def __init__(self, meta_path = "assets/encoded_language.pt"):
         self.language_emb = torch.load(meta_path, map_location="cpu")
         print(f"successfully load language hub: {self.language_emb.keys()}")
         

@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 from pathlib import Path
 import subprocess
 from accelerate import Accelerator
-from dataset import create_dataloader
+from dataset.dataset import create_dataloader
 import model
 from timm import create_model
 from safetensors.torch import load_file
@@ -49,13 +49,19 @@ def get_args_parser():
     return parser
 
 def main(args):
+    # fallback for non-distributed runs
+    if not hasattr(args, "rank"):
+        args.rank = 0
+    if not hasattr(args, "world_size"):
+        args.world_size = 1
+
     output_dir = Path(args.output_dir)
     kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
     accelerator = Accelerator(mixed_precision = args.precision,
                               log_with="tensorboard", 
                               project_dir=output_dir, kwargs_handlers=[kwargs])
     accelerator.init_trackers("Training Libero")
-    torch.distributed.barrier()
+    # torch.distributed.barrier()
     model, _ = create_model(args.model)
     if args.pretrained is not None:
         accelerator.print('>>>>>> load pretrain from {}'.format(args.pretrained))
@@ -143,10 +149,74 @@ def slurm_env_init(args):
     cudnn.benchmark = True
     return args
 
+def init_distributed_mode(args):
+
+    # Case 1: running with SLURM
+    if 'SLURM_PROCID' in os.environ:
+
+        args.rank = int(os.environ['SLURM_PROCID'])
+        args.world_size = int(os.environ['SLURM_NTASKS'])
+        args.gpu = args.rank % torch.cuda.device_count()
+
+        node_list = os.environ['SLURM_NODELIST']
+
+        addr = subprocess.getoutput(
+            f'scontrol show hostname {node_list} | head -n1'
+        )
+
+        os.environ['MASTER_ADDR'] = addr
+        os.environ['MASTER_PORT'] = str(args.port)
+
+    # Case 2: torchrun / accelerate
+    elif 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
+
+        args.rank = int(os.environ["RANK"])
+        args.world_size = int(os.environ['WORLD_SIZE'])
+        args.gpu = int(os.environ['LOCAL_RANK'])
+
+    # Case 3: single GPU / local run
+    else:
+
+        args.rank = 0
+        args.world_size = 1
+        args.gpu = 0
+
+        os.environ['MASTER_ADDR'] = '127.0.0.1'
+        os.environ['MASTER_PORT'] = str(args.port)
+
+    torch.cuda.set_device(args.gpu)
+
+    args.dist_backend = 'nccl'
+
+    print(
+        f"| distributed init (rank {args.rank}): {args.dist_url}, gpu {args.gpu}",
+        flush=True
+    )
+
+    torch.distributed.init_process_group(
+        backend=args.dist_backend,
+        init_method=args.dist_url,
+        world_size=args.world_size,
+        rank=args.rank
+    )
+
+    torch.distributed.barrier()
+
+    # fix the seed
+    seed = args.seed + args.rank
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    cudnn.benchmark = True
+
+    return args
+
 if __name__ == '__main__':
      
     parser = argparse.ArgumentParser('training script', parents=[get_args_parser()])
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
-    main(slurm_env_init(args))
+    main(args)
+    # main(slurm_env_init(args))
+    main(init_distributed_mode(args))
