@@ -1,0 +1,12 @@
+python train.py \
+    --model model_abs_ee_act \
+    --epochs 2000 \
+    --sample_num 10000 \
+    --batch-size 64 \
+    --precision no \
+    --learning_rate 3e-4 \
+    --output_dir real-world/exp/touch_cube/abs_ee \
+    --train_metas_path real-world/meta_files/touch.jsonl \
+    --save_interval 1000 \
+    --port 29550 \
+    --weight_decay 0
