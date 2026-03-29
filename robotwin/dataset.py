@@ -51,6 +51,55 @@ def angle_diff(a, b):
 def quat_to_euler(q: np.ndarray) -> np.ndarray:
     return R.from_quat(q).as_euler('xyz', degrees=False)
 
+
+def build_robotwin2_rel_ee_chunk_delta(
+    left_ee,
+    right_ee,
+    left_grip,
+    right_grip,
+    idx: int,
+    f: int,
+    rot_repr: str,
+):
+    """
+    EE chunk 内 delta 相对窗口起点 idx（与 proprio=时刻 idx 对齐）。
+    rot_repr: rot6d | quat | euler
+    """
+    if rot_repr not in ("rot6d", "quat", "euler"):
+        raise ValueError(f"build_robotwin2_rel_ee_chunk_delta: unknown rot_repr {rot_repr!r}")
+
+    left_delta_xyz = left_ee[idx + 1 : idx + 1 + f, :3] - left_ee[idx : idx + 1, :3]
+    right_delta_xyz = right_ee[idx + 1 : idx + 1 + f, :3] - right_ee[idx : idx + 1, :3]
+
+    if rot_repr == "rot6d":
+        left_rot = quat_to_rotate6D(left_ee[:, 3:])
+        right_rot = quat_to_rotate6D(right_ee[:, 3:])
+        left_delta_rot = left_rot[idx + 1 : idx + 1 + f] - left_rot[idx : idx + 1]
+        right_delta_rot = right_rot[idx + 1 : idx + 1 + f] - right_rot[idx : idx + 1]
+    elif rot_repr == "quat":
+        left_rot = align_quat(left_ee[:, 3:])
+        right_rot = align_quat(right_ee[:, 3:])
+        left_delta_rot = left_rot[idx + 1 : idx + 1 + f] - left_rot[idx : idx + 1]
+        right_delta_rot = right_rot[idx + 1 : idx + 1 + f] - right_rot[idx : idx + 1]
+    else:  # euler
+        left_rot = quat_to_euler(left_ee[:, 3:])
+        right_rot = quat_to_euler(right_ee[:, 3:])
+        left_delta_rot = angle_diff(left_rot[idx + 1 : idx + 1 + f], left_rot[idx : idx + 1])
+        right_delta_rot = angle_diff(right_rot[idx + 1 : idx + 1 + f], right_rot[idx : idx + 1])
+
+    return np.concatenate(
+        [
+            left_delta_xyz,
+            left_delta_rot,
+            left_grip[idx + 1 : idx + 1 + f, None],
+            right_delta_xyz,
+            right_delta_rot,
+            right_grip[idx + 1 : idx + 1 + f, None],
+        ],
+        axis=-1,
+    )
+
+
 class InfiniteDataReader(IterableDataset):
     def __init__(self,
                  rank:int,
@@ -231,38 +280,10 @@ class InfiniteDataReader(IterableDataset):
                     ], axis=-1)
                     action_seq = ee_diff
                     index_list = list(range(0, action_seq.shape[0] - freq))
-                else: # chunk-wise delta
-                    print('rel-ee chunk-wise delta')
-                    left_delta_xyz = left_ee[1:, :3] - left_ee[:1, :3]
-                    right_delta_xyz = right_ee[1:, :3] - right_ee[:1, :3]
-                    # 统一：rotation 全部直接减
-                    if self.rot_repr == "rot6d":
-                        left_rot = quat_to_rotate6D(left_ee[:, 3:])
-                        right_rot = quat_to_rotate6D(right_ee[:, 3:])
-                    elif self.rot_repr == "quat":
-                        left_rot = align_quat(left_ee[:, 3:])
-                        right_rot = align_quat(right_ee[:, 3:])
-                    elif self.rot_repr == "euler":
-                        left_rot = quat_to_euler(left_ee[:, 3:])
-                        right_rot = quat_to_euler(right_ee[:, 3:])
-                    # ⚠️ Euler delta 会有 wrap 问题（π → -π）
-                    if self.rot_repr == "euler":
-                        left_delta_rot = angle_diff(left_rot[1:], left_rot[:1])
-                        right_delta_rot = angle_diff(right_rot[1:], right_rot[:1])
-                    else:
-                        left_delta_rot = left_rot[1:] - left_rot[:1]
-                        right_delta_rot = right_rot[1:] - right_rot[:1]
-                    ee_diff = np.concatenate([
-                        left_delta_xyz,
-                        left_delta_rot,
-                        left_grip[1:, None],
-                        right_delta_xyz,
-                        right_delta_rot,
-                        right_grip[1:, None]
-                    ], axis=-1)
-                    action_seq = ee_diff
-                    # print('action_seq', action_seq.shape)
-                    index_list = list(range(0, action_seq.shape[0] - freq))
+                else: # chunk-wise：delta 相对窗口起点（与 proprio=prorpio_seq[idx] 对齐）
+                    traj_len = left_ee.shape[0]
+                    action_seq = None
+                    index_list = list(range(0, traj_len - freq))
 
             elif dataset_name == 'robotwin2_rel_qpos':
                 freq = self.num_actions
@@ -285,15 +306,10 @@ class InfiniteDataReader(IterableDataset):
                     ], axis=-1)
                     action_seq = joint_diff
                     index_list = list(range(0, action_seq.shape[0] - freq))
-                else: # chunk_wise delta
-                    joint_diff = np.concatenate([
-                        left_joint[1:] - left_joint[:1],
-                        left_grip[1:, None],
-                        right_joint[1:] - right_joint[:1],
-                        right_grip[1:, None]
-                    ], axis=-1)
-                    action_seq = joint_diff
-                    index_list = list(range(0, action_seq.shape[0] - freq))
+                else: # chunk_wise: delta 相对当前窗口起点 q_idx（与 proprio=prorpio_seq[idx] 对齐）
+                    traj_len = left_joint.shape[0]
+                    action_seq = None  # 在循环内按 idx 构造
+                    index_list = list(range(0, traj_len - freq))
 
             else: raise NotImplementedError
             
@@ -316,7 +332,26 @@ class InfiniteDataReader(IterableDataset):
                     ins = datapath.split('/')[-3].replace('_', ' ')  # -4, -3, -2 for robotwin clean, sim, real
                 # print('ins', ins)
                 image_input =  torch.stack([self.image_aug(decode_image_from_bytes(img[idx])) for img in images])
-                action = action_seq[idx:idx+self.num_actions]
+                if dataset_name == 'robotwin2_rel_qpos' and self.chunk_wise:
+                    f = self.num_actions
+                    action = np.concatenate([
+                        left_joint[idx + 1 : idx + 1 + f] - left_joint[idx : idx + 1],
+                        left_grip[idx + 1 : idx + 1 + f, None],
+                        right_joint[idx + 1 : idx + 1 + f] - right_joint[idx : idx + 1],
+                        right_grip[idx + 1 : idx + 1 + f, None],
+                    ], axis=-1)
+                elif dataset_name == 'robotwin2_rel_ee' and self.chunk_wise:
+                    action = build_robotwin2_rel_ee_chunk_delta(
+                        left_ee,
+                        right_ee,
+                        left_grip,
+                        right_grip,
+                        idx,
+                        self.num_actions,
+                        self.rot_repr,
+                    )
+                else:
+                    action = action_seq[idx:idx+self.num_actions]
                 # print('self.language_emb', self.language_emb.keys())
                 if self.discretize:
                     # print('original action', action[:5])

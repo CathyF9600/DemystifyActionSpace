@@ -10,7 +10,7 @@ import torch.backends.cudnn as cudnn
 from pathlib import Path
 import subprocess
 from accelerate import Accelerator
-from dataset import create_dataloader
+from dataset import create_dataloader, build_robotwin2_rel_ee_chunk_delta
 import model
 from timm import create_model
 from safetensors.torch import load_file
@@ -110,7 +110,8 @@ def compute_mean_std(hdf5_paths,
         data_type='rel',     
         rot_repr="rot6d",
         chunk_wise=True,
-        env=None
+        env=None,
+        num_action_chunk=30,
     ):
     all_proprios = []
     all_actions = []
@@ -151,14 +152,25 @@ def compute_mean_std(hdf5_paths,
                                 right_grip[1:, None]
                             ], axis=-1)
                             action_seq = joint_diff
-                        else: # chunk_wise delta
-                            joint_diff = np.concatenate([
-                                left_joint[1:] - left_joint[:1],
-                                left_grip[1:, None],
-                                right_joint[1:] - right_joint[:1],
-                                right_grip[1:, None]
-                            ], axis=-1)
-                            action_seq = joint_diff
+                        else: # chunk_wise：与 dataset 一致，delta 相对窗口起点 q_idx
+                            freq = num_action_chunk
+                            T = left_joint.shape[0]
+                            rows = []
+                            for win_idx in range(0, T - freq):
+                                ch = np.concatenate([
+                                    left_joint[win_idx + 1 : win_idx + 1 + freq]
+                                    - left_joint[win_idx : win_idx + 1],
+                                    left_grip[win_idx + 1 : win_idx + 1 + freq, None],
+                                    right_joint[win_idx + 1 : win_idx + 1 + freq]
+                                    - right_joint[win_idx : win_idx + 1],
+                                    right_grip[win_idx + 1 : win_idx + 1 + freq, None],
+                                ], axis=-1)
+                                rows.append(ch)
+                            action_seq = (
+                                np.concatenate(rows, axis=0)
+                                if rows
+                                else np.zeros((0, prorpio_seq.shape[1]))
+                            )
                 else: # ee
                     if env == 'real':
                         prorpio_seq = data['observations/eef_quaternion'][()]
@@ -228,35 +240,26 @@ def compute_mean_std(hdf5_paths,
                                 right_grip[1:, None]
                             ], axis=-1)
                             action_seq = ee_diff
-                        else: # chunk-wise delta ee
-                            left_delta_xyz = left_ee[1:, :3] - left_ee[:1, :3]
-                            right_delta_xyz = right_ee[1:, :3] - right_ee[:1, :3]
-                            # 统一：rotation 全部直接减
-                            if rot_repr == "rot6d":
-                                left_rot = quat_to_rotate6D(left_ee[:, 3:])
-                                right_rot = quat_to_rotate6D(right_ee[:, 3:])
-                            elif rot_repr == "quat":
-                                left_rot = align_quat(left_ee[:, 3:])
-                                right_rot = align_quat(right_ee[:, 3:])
-                            elif rot_repr == "euler":
-                                left_rot = quat_to_euler(left_ee[:, 3:])
-                                right_rot = quat_to_euler(right_ee[:, 3:])
-                            # ⚠️ Euler delta 会有 wrap 问题（π → -π）
-                            if rot_repr == "euler":
-                                left_delta_rot = angle_diff(left_rot[1:], left_rot[:1])
-                                right_delta_rot = angle_diff(right_rot[1:], right_rot[:1])
-                            else:
-                                left_delta_rot = left_rot[1:] - left_rot[:1]
-                                right_delta_rot = right_rot[1:] - right_rot[:1]
-                            ee_diff = np.concatenate([
-                                left_delta_xyz,
-                                left_delta_rot,
-                                left_grip[1:, None],
-                                right_delta_xyz,
-                                right_delta_rot,
-                                right_grip[1:, None]
-                            ], axis=-1)
-                            action_seq = ee_diff
+                        else: # chunk-wise：与 dataset 一致，delta 相对窗口起点
+                            freq = num_action_chunk
+                            T = left_ee.shape[0]
+                            rows = []
+                            for win_idx in range(0, T - freq):
+                                ch = build_robotwin2_rel_ee_chunk_delta(
+                                    left_ee,
+                                    right_ee,
+                                    left_grip,
+                                    right_grip,
+                                    win_idx,
+                                    freq,
+                                    rot_repr,
+                                )
+                                rows.append(ch)
+                            action_seq = (
+                                np.concatenate(rows, axis=0)
+                                if rows
+                                else np.zeros((0, prorpio_seq.shape[1]))
+                            )
 
             if data_type == 'abs':
                 if control == 'qpos':
@@ -293,9 +296,14 @@ def compute_mean_std(hdf5_paths,
                             right_grip[:, None]
                         ], axis=-1)
                         prorpio_seq = action_seq
-            all_actions.append(action_seq)
+            if action_seq.shape[0] > 0:
+                all_actions.append(action_seq)
             all_proprios.append(prorpio_seq)
     # ---- Compute stats ----
+    if len(all_actions) == 0:
+        raise RuntimeError(
+            "compute_mean_std: no action rows (check trajectories length vs num_action_chunk)."
+        )
     stacked_actions = np.concatenate(all_actions, axis=0)
     stacked_proprios = np.concatenate(all_proprios, axis=0)
     print('stacked_actions.shape', stacked_actions.shape, 'stacked_proprios.shape', stacked_proprios.shape)
@@ -378,7 +386,13 @@ def main(args):
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad) / 1000 / 1000
     accelerator.print(f'number of params: {n_parameters} M')
 
-    stats = compute_mean_std(hdf5_files, control=control, data_type=data_type, env=args.env)
+    stats = compute_mean_std(
+        hdf5_files,
+        control=control,
+        data_type=data_type,
+        env=args.env,
+        num_action_chunk=model.num_action_chunk,
+    )
     model.normalizer.set_dataset_stats(
         mean={
             "proprio": stats["proprio"]["mean"],
