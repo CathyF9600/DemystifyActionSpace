@@ -35,7 +35,7 @@ class Normalizer(nn.Module):
         self.action_std.copy_(torch.tensor(std["action"]))
 
     def normalize(self, proprio, action_seq=None):
-        # print("self.normalize_proprio", self.normalize_proprio, "self.normalize_action", self.normalize_action)
+        # print("proprio_mean", self.proprio_mean[None], "proprio_std", self.proprio_std[None])
         if self.normalize_proprio and proprio is not None:
             proprio = (proprio - self.proprio_mean[None]) / (self.proprio_std[None] + 1e-6)
 
@@ -45,6 +45,7 @@ class Normalizer(nn.Module):
         return proprio, action_seq
     
     def denormalize(self, action_seq):
+        print('################# in model: denormalize')
         action_seq = action_seq * (self.action_std[None, None, :] + 1e-6) + self.action_mean[None, None, :]
         return action_seq
 
@@ -167,7 +168,7 @@ class BaseModel(nn.Module):
                  ):
         super().__init__()
         self.normalizer = Normalizer(dim_proprio=dim_proprio, dim_actions=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
-
+        print('action scale', action_scale)
         self.action_scale = action_scale
         self.model_type = model_type
         self.num_action_chunk = num_action_chunk
@@ -243,6 +244,7 @@ class BaseModel(nn.Module):
                 steps = 5
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        print('############# Normalizing proprio')
         proprio, _ = self.normalizer.normalize(proprio, action_seq=None)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
@@ -255,6 +257,8 @@ class BaseModel(nn.Module):
                         language_feature = encoded_language,
                         proprio = proprio)
             pred_action /= self.action_scale
+            denorm_output = self.normalizer.denormalize(pred_action)
+            return denorm_output # denoised action
         elif self.model_type == 'discrete':
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
@@ -959,11 +963,11 @@ def model_rel_qpos_dis(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
     return model, language_encoder()
 
 
-# Rebuttal for normalization
+########################### Rebuttal for normalization - mean std ###########################
 @register_model
-def abs_ee_cnt_mean(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+def abs_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 10,
+                num_action_chunk = 30,
                 pt_path = "encoded_language.pt",
                 **kwargs):
     model = BaseModel(
@@ -973,12 +977,145 @@ def abs_ee_cnt_mean(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
         dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
         dim_actions = dim_actions, # 14 for euler angles
         num_action_chunk = num_action_chunk,
+        action_scale = 100,
         normalize_proprio = True,
         normalize_action = True
     )
     return model, language_encoder(pt_path=pt_path)
 
+@register_model
+def abs_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
 
+@register_model
+def rel_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+@register_model
+def rel_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+########################### Rebuttal for normalization - min max ###########################
+@register_model
+def abs_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+@register_model
+def abs_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+@register_model
+def rel_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+                dim_actions = 20, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+@register_model
+def rel_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
+                dim_actions = 14, # 14 for euler angles
+                num_action_chunk = 30,
+                pt_path = "encoded_language.pt",
+                **kwargs):
+    model = BaseModel(
+        vision_backbone = "resnet18.a1_in1k",
+        model_type = "continuous",
+        dim_language = 768,
+        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
+        dim_actions = dim_actions, # 14 for euler angles
+        num_action_chunk = num_action_chunk,
+        action_scale = 100,
+        normalize_proprio = True,
+        normalize_action = True
+    )
+    return model, language_encoder(pt_path=pt_path)
 
 
 

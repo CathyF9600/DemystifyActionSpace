@@ -81,20 +81,50 @@ def cal_delta_rotate(q1, q2):
     del_rotate = q1 * q2.inv()
     return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
 
-def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
+def convert_rot(quat, rot_repr):
+    if rot_repr == "rot6d":
+        return quat_to_rotate6D(quat)
+    elif rot_repr == "quat":
+        return quat
+    elif rot_repr == "euler":
+        return R.from_quat(quat).as_euler('xyz', degrees=False)
+    else:
+        raise ValueError
+
+def align_quat(q):
+    q = q.copy()
+    for i in range(1, len(q)):
+        if np.dot(q[i], q[i-1]) < 0:
+            q[i] = -q[i]
+    return q
+
+def angle_diff(a, b):
+    d = a - b
+    return (d + np.pi) % (2 * np.pi) - np.pi
+
+def quat_to_euler(q: np.ndarray) -> np.ndarray:
+    return R.from_quat(q).as_euler('xyz', degrees=False)
+
+def compute_mean_std(hdf5_paths, 
+        control='ee', 
+        data_type='rel',     
+        rot_repr="rot6d",
+        chunk_wise=True,
+        env=None
+    ):
     all_proprios = []
     all_actions = []
-    print('control, data_type, env', control, data_type, env)
+    print('control, data_type, rot_repr, chunk_wise, env', control, data_type, rot_repr, chunk_wise, env)
     for path in hdf5_paths:
         with h5py.File(path, 'r') as data:
             if data_type =='rel':
                 if control == 'qpos':
                     if env == 'real':
-                        proprio_seq = data['observations/qpos'][()]
-                        left_joint = proprio_seq[:, :6]
-                        right_joint = proprio_seq[:, 7:13]
-                        left_grip = proprio_seq[:, 6]
-                        right_grip = proprio_seq[:, 13]
+                        prorpio_seq = data['observations/qpos'][()]
+                        left_joint = prorpio_seq[:, :6]
+                        right_joint = prorpio_seq[:, 7:13]
+                        left_grip = prorpio_seq[:, 6]
+                        right_grip = prorpio_seq[:, 13]
                         joint_diff = np.concatenate([
                             left_joint[1:] - left_joint[:-1],
                             left_grip[1:, None],  # use future value directly
@@ -107,27 +137,36 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                         right_joint = data["joint_action/right_arm"][()]    # (T, 7)
                         left_grip = data["joint_action/left_gripper"][()]   # (T,)
                         right_grip = data["joint_action/right_gripper"][()] # (T,)
-                        proprio_seq = np.concatenate([
-                            left_joint,                        # (T,7)
-                            left_grip[:, None],             # (T,1)
-                            right_joint,                    # (T,7)
-                            right_grip[:, None]             # (T,1)
+                        prorpio_seq = np.concatenate([
+                            left_joint,
+                            left_grip[:, None],
+                            right_joint,
+                            right_grip[:, None]
                         ], axis=-1)
-                        joint_diff = np.concatenate([
-                            left_joint[1:] - left_joint[:-1],
-                            left_grip[1:, None],
-                            right_joint[1:] - right_joint[:-1],
-                            right_grip[1:, None]
-                        ], axis=-1)                
-                        action_seq = joint_diff
+                        if not chunk_wise:
+                            joint_diff = np.concatenate([
+                                left_joint[1:] - left_joint[:-1],
+                                left_grip[1:, None],
+                                right_joint[1:] - right_joint[:-1],
+                                right_grip[1:, None]
+                            ], axis=-1)
+                            action_seq = joint_diff
+                        else: # chunk_wise delta
+                            joint_diff = np.concatenate([
+                                left_joint[1:] - left_joint[:1],
+                                left_grip[1:, None],
+                                right_joint[1:] - right_joint[:1],
+                                right_grip[1:, None]
+                            ], axis=-1)
+                            action_seq = joint_diff
                 else: # ee
                     if env == 'real':
-                        proprio_seq = data['observations/eef_quaternion'][()]
-                        left_ee = proprio_seq[:, :7]
-                        right_ee = proprio_seq[:, 8:15]
-                        left_grip = proprio_seq[:, 7]
-                        right_grip = proprio_seq[:, 15]
-                        proprio_seq = np.concatenate([
+                        prorpio_seq = data['observations/eef_quaternion'][()]
+                        left_ee = prorpio_seq[:, :7]
+                        right_ee = prorpio_seq[:, 8:15]
+                        left_grip = prorpio_seq[:, 7]
+                        right_grip = prorpio_seq[:, 15]
+                        prorpio_seq = np.concatenate([
                             left_ee[:, :3],
                             quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
                             left_grip[:, None],             # (T,1)
@@ -148,37 +187,82 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             right_grip[1:, None]
                         ], axis=-1)
                     else:
-                        left_pos = data["endpose/left_endpose"][()]
-                        right_pos = data["endpose/right_endpose"][()]
+                        left_ee = data["endpose/left_endpose"][()]
+                        right_ee = data["endpose/right_endpose"][()]
                         left_grip = data["endpose/left_gripper"][()]
                         right_grip = data["endpose/right_gripper"][()]
-                        left_delta_xyz = left_pos[1:, :3] - left_pos[:-1, :3]
-                        right_delta_xyz = right_pos[1:, :3] - right_pos[:-1, :3]
-                        proprio_seq = np.concatenate([
-                            left_pos[:, :3],
-                            quat_to_rotate6D(left_pos[:, 3:]),                        # (T,7)
-                            left_grip[:, None],             # (T,1)
-                            right_pos[:, :3],
-                            quat_to_rotate6D(right_pos[:, 3:]),                       # (T,7)
-                            right_grip[:, None]             # (T,1)
+                        prorpio_seq = np.concatenate([
+                            left_ee[:, :3],
+                            convert_rot(left_ee[:, 3:], rot_repr),
+                            left_grip[:, None],
+                            right_ee[:, :3],
+                            convert_rot(right_ee[:, 3:], rot_repr),
+                            right_grip[:, None]
                         ], axis=-1)
-                        left_delta_rot6d = cal_delta_rotate(left_pos[1:, 3:], left_pos[:-1, 3:])
-                        right_delta_rot6d = cal_delta_rotate(right_pos[1:, 3:], right_pos[:-1, 3:])
-
-                        action_seq = np.concatenate([
-                            left_delta_xyz,
-                            left_delta_rot6d,
-                            left_grip[1:, None],
-                            right_delta_xyz,
-                            right_delta_rot6d,
-                            right_grip[1:, None]
-                        ], axis=-1)
+                        if not chunk_wise:
+                            left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
+                            right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
+                            # 统一：rotation 全部直接减
+                            if rot_repr == "rot6d":
+                                left_rot = quat_to_rotate6D(left_ee[:, 3:])
+                                right_rot = quat_to_rotate6D(right_ee[:, 3:])
+                            elif rot_repr == "quat":
+                                left_rot = align_quat(left_ee[:, 3:])
+                                right_rot = align_quat(right_ee[:, 3:])
+                            elif rot_repr == "euler":
+                                left_rot = quat_to_euler(left_ee[:, 3:])
+                                right_rot = quat_to_euler(right_ee[:, 3:])
+                            # ⚠️ Euler delta 会有 wrap 问题（π → -π）
+                            if rot_repr == "euler":
+                                left_delta_rot = angle_diff(left_rot[1:], left_rot[:-1])
+                                right_delta_rot = angle_diff(right_rot[1:], right_rot[:-1])
+                            else:
+                                left_delta_rot = left_rot[1:] - left_rot[:-1]
+                                right_delta_rot = right_rot[1:] - right_rot[:-1]
+                            ee_diff = np.concatenate([
+                                left_delta_xyz,
+                                left_delta_rot,
+                                left_grip[1:, None],
+                                right_delta_xyz,
+                                right_delta_rot,
+                                right_grip[1:, None]
+                            ], axis=-1)
+                            action_seq = ee_diff
+                        else: # chunk-wise delta ee
+                            left_delta_xyz = left_ee[1:, :3] - left_ee[:1, :3]
+                            right_delta_xyz = right_ee[1:, :3] - right_ee[:1, :3]
+                            # 统一：rotation 全部直接减
+                            if rot_repr == "rot6d":
+                                left_rot = quat_to_rotate6D(left_ee[:, 3:])
+                                right_rot = quat_to_rotate6D(right_ee[:, 3:])
+                            elif rot_repr == "quat":
+                                left_rot = align_quat(left_ee[:, 3:])
+                                right_rot = align_quat(right_ee[:, 3:])
+                            elif rot_repr == "euler":
+                                left_rot = quat_to_euler(left_ee[:, 3:])
+                                right_rot = quat_to_euler(right_ee[:, 3:])
+                            # ⚠️ Euler delta 会有 wrap 问题（π → -π）
+                            if rot_repr == "euler":
+                                left_delta_rot = angle_diff(left_rot[1:], left_rot[:1])
+                                right_delta_rot = angle_diff(right_rot[1:], right_rot[:1])
+                            else:
+                                left_delta_rot = left_rot[1:] - left_rot[:1]
+                                right_delta_rot = right_rot[1:] - right_rot[:1]
+                            ee_diff = np.concatenate([
+                                left_delta_xyz,
+                                left_delta_rot,
+                                left_grip[1:, None],
+                                right_delta_xyz,
+                                right_delta_rot,
+                                right_grip[1:, None]
+                            ], axis=-1)
+                            action_seq = ee_diff
 
             if data_type == 'abs':
                 if control == 'qpos':
                     if env == 'real':
                         action_seq = data['observations/qpos'][()] # 实机
-                        proprio_seq = action_seq
+                        prorpio_seq = action_seq
                     else:
                         left_joint = data["joint_action/left_arm"][()]      # (T, 7)
                         right_joint = data["joint_action/right_arm"][()]    # (T, 7)
@@ -190,11 +274,11 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             right_joint,
                             right_grip[:, None]
                         ], axis=-1)
-                        proprio_seq = action_seq
+                        prorpio_seq = action_seq
                 else: # ee
                     if env == 'real':
                         action_seq = data['observations/eef_6d'][()] # 实机
-                        proprio_seq = action_seq
+                        prorpio_seq = action_seq
                     else:
                         left_ee = data["endpose/left_endpose"][()]
                         right_ee = data["endpose/right_endpose"][()]
@@ -208,9 +292,9 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
                             quat_to_rotate6D(right_ee[:, 3:]),  
                             right_grip[:, None]
                         ], axis=-1)
-                        proprio_seq = action_seq
+                        prorpio_seq = action_seq
             all_actions.append(action_seq)
-            all_proprios.append(proprio_seq)
+            all_proprios.append(prorpio_seq)
     # ---- Compute stats ----
     stacked_actions = np.concatenate(all_actions, axis=0)
     stacked_proprios = np.concatenate(all_proprios, axis=0)
@@ -232,6 +316,8 @@ def compute_mean_std(hdf5_paths, control='ee', data_type='rel', env=None):
     return stats
 
 
+
+
 def get_hdf5s(metas_path):
     metas = {}
 
@@ -248,6 +334,7 @@ def get_hdf5s(metas_path):
 
 
 def main(args):
+
     output_dir = Path(args.output_dir)
     kwargs = DistributedDataParallelKwargs(find_unused_parameters=False)
     accelerator = Accelerator(mixed_precision = args.precision,
@@ -276,6 +363,13 @@ def main(args):
         # print('Saving stats_file', args.train_metas_path, stats_file)
         # print('Processing stats for', args.model_type, data_type, control)
 
+    config = ["chunk"]
+    if 'rot' in args.wandb_name: # abs_ee_cnt_rot, rel_ee_cnt_rot, abs_ee_cnt_quat, abs_ee_cnt_euler, etc
+        config.append("rot6d")
+    elif "quat" in args.wandb_name:
+        config.append("quat")
+    elif "euler" in args.wandb_name:
+        config.append("euler")
 
     model, _ = create_model(args.model, proprio_dim=proprio_dim, action_dim=proprio_dim, normalize_proprio=args.normalize_proprio, normalize_action=args.normalize_action)
     if args.pretrained is not None:
@@ -305,6 +399,7 @@ def main(args):
         model_type=args.model_type,
         num_bins=args.num_bins,
         pt_path = args.pt_path,
+        config=config
     ))
     
     model = model.to(torch.float32)
@@ -329,7 +424,7 @@ def main(args):
         past_time = time.time()
         data = next(train_dataloader)
         inputs = {
-            **{key: value.cuda(non_blocking=True) for key, value in data.items()},
+            **{key: value.to(accelerator.device, non_blocking=True) for key, value in data.items()},
         }
         optim.zero_grad()
         loss = model(**inputs)

@@ -37,6 +37,20 @@ def cal_delta_rotate(q1, q2):
     del_rotate = q1 * q2.inv()
     return del_rotate.as_matrix()[..., :, :2].reshape(q1.as_quat().shape[:-1] + (6,))
 
+def align_quat(q):
+    q = q.copy()
+    for i in range(1, len(q)):
+        if np.dot(q[i], q[i-1]) < 0:
+            q[i] = -q[i]
+    return q
+    
+def angle_diff(a, b):
+    d = a - b
+    return (d + np.pi) % (2 * np.pi) - np.pi
+
+def quat_to_euler(q: np.ndarray) -> np.ndarray:
+    return R.from_quat(q).as_euler('xyz', degrees=False)
+
 class InfiniteDataReader(IterableDataset):
     def __init__(self,
                  rank:int,
@@ -46,7 +60,26 @@ class InfiniteDataReader(IterableDataset):
                  num_actions = 10,
                  num_bins = 256,
                  pt_path = "encoded_language.pt",
+                 config=None
                  ):
+        # ===== config parsing =====
+        self.rot_repr = None
+        self.chunk_wise = False
+        if config is not None:
+            for c in config:
+                # ----- rotation -----
+                if c in ["rot6d", "quat", "euler"]:
+                    self.rot_repr = c
+                # ----- chunk-wise -----
+                elif c.startswith("chunk"):
+                    self.chunk_wise = True
+                # ----- force step -----
+                elif c == "step":
+                    self.chunk_wise = False
+                else:
+                    raise ValueError(f"Unknown config option: {c}")
+        print('config:', 'rot_repr', self.rot_repr, 'chunk_wise', self.chunk_wise)
+
         #### read meta files, please put all json file in a one directory（metas_path）
         self.rank = rank
         self.discretize = False
@@ -97,6 +130,16 @@ class InfiniteDataReader(IterableDataset):
 
         return (action * (self.num_bins - 1)).astype(np.int64)
 
+    def convert_rot(self, quat):
+        if self.rot_repr == "rot6d":
+            return quat_to_rotate6D(quat)
+        elif self.rot_repr == "quat":
+            return align_quat(quat) # ⚠️ quaternion sign ambiguity
+        elif self.rot_repr == "euler":
+            return quat_to_euler(quat)
+        else:
+            raise ValueError(f"Unknown rot_repr {self.rot_repr}")
+
     def read_hdf5(self, dataset_name, idx):
         meta = self.metas[dataset_name]
         datapath = meta['datalist'][idx]
@@ -112,11 +155,11 @@ class InfiniteDataReader(IterableDataset):
                 right_grip = data["endpose/right_gripper"][()]  # shape (T,)
                 prorpio_seq = np.concatenate([
                     left_ee[:, :3],
-                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
-                    left_grip[:, None],             # (T,1)
+                    self.convert_rot(left_ee[:, 3:], ),
+                    left_grip[:, None],
                     right_ee[:, :3],
-                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
-                    right_grip[:, None]             # (T,1)
+                    self.convert_rot(right_ee[:, 3:]),
+                    right_grip[:, None]
                 ], axis=-1)
                 action_seq = prorpio_seq[1:]
                 # if not self.discretize: # only do min max normalization (later) for discrete model
@@ -142,142 +185,115 @@ class InfiniteDataReader(IterableDataset):
                 #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
                 index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
+
             elif dataset_name == 'robotwin2_rel_ee':
-                freq = self.num_actions  # adjust if needed
-                left_ee = data["endpose/left_endpose"][()]      # shape (T, 7)
-                right_ee = data["endpose/right_endpose"][()]    # shape (T, 7)
-                left_grip = data["endpose/left_gripper"][()]    # shape (T,)
-                right_grip = data["endpose/right_gripper"][()]  # shape (T,)
+                freq = self.num_actions
+                left_ee = data["endpose/left_endpose"][()]      # (T, 7)
+                right_ee = data["endpose/right_endpose"][()]    # (T, 7)
+                left_grip = data["endpose/left_gripper"][()]    # (T,)
+                right_grip = data["endpose/right_gripper"][()]  # (T,)
                 prorpio_seq = np.concatenate([
                     left_ee[:, :3],
-                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
-                    left_grip[:, None],             # (T,1)
+                    self.convert_rot(left_ee[:, 3:]),
+                    left_grip[:, None],
                     right_ee[:, :3],
-                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
-                    right_grip[:, None]             # (T,1)
+                    self.convert_rot(right_ee[:, 3:]),
+                    right_grip[:, None]
                 ], axis=-1)
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
-                right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
-                left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
-                right_delta_rot6d = cal_delta_rotate(right_ee[1:, 3:], right_ee[:-1, 3:])
-                ee_diff = np.concatenate([
-                    left_delta_xyz,
-                    left_delta_rot6d,
-                    left_grip[1:, None],   # future gripper value
-                    right_delta_xyz,
-                    right_delta_rot6d,
-                    right_grip[1:, None]
-                ], axis=-1)
-                # if not self.discretize: # only do min max normalization (later) for discrete model
-                #     action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # else:
-                action_seq = ee_diff
-                index_list = list(range(0, action_seq.shape[0] - freq))
+                # ===== delta =====
+                if not self.chunk_wise:
+                    left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
+                    right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
+                    # 统一：rotation 全部直接减
+                    if self.rot_repr == "rot6d":
+                        left_rot = quat_to_rotate6D(left_ee[:, 3:])
+                        right_rot = quat_to_rotate6D(right_ee[:, 3:])
+                    elif self.rot_repr == "quat":
+                        left_rot = align_quat(left_ee[:, 3:])
+                        right_rot = align_quat(right_ee[:, 3:])
+                    elif self.rot_repr == "euler":
+                        left_rot = quat_to_euler(left_ee[:, 3:])
+                        right_rot = quat_to_euler(right_ee[:, 3:])
+                    # ⚠️ Euler delta 会有 wrap 问题（π → -π）
+                    if self.rot_repr == "euler":
+                        left_delta_rot = angle_diff(left_rot[1:], left_rot[:-1])
+                        right_delta_rot = angle_diff(right_rot[1:], right_rot[:-1])
+                    else:
+                        left_delta_rot = left_rot[1:] - left_rot[:-1]
+                        right_delta_rot = right_rot[1:] - right_rot[:-1]
+                    ee_diff = np.concatenate([
+                        left_delta_xyz,
+                        left_delta_rot,
+                        left_grip[1:, None],
+                        right_delta_xyz,
+                        right_delta_rot,
+                        right_grip[1:, None]
+                    ], axis=-1)
+                    action_seq = ee_diff
+                    index_list = list(range(0, action_seq.shape[0] - freq))
+                else: # chunk-wise delta
+                    print('rel-ee chunk-wise delta')
+                    left_delta_xyz = left_ee[1:, :3] - left_ee[:1, :3]
+                    right_delta_xyz = right_ee[1:, :3] - right_ee[:1, :3]
+                    # 统一：rotation 全部直接减
+                    if self.rot_repr == "rot6d":
+                        left_rot = quat_to_rotate6D(left_ee[:, 3:])
+                        right_rot = quat_to_rotate6D(right_ee[:, 3:])
+                    elif self.rot_repr == "quat":
+                        left_rot = align_quat(left_ee[:, 3:])
+                        right_rot = align_quat(right_ee[:, 3:])
+                    elif self.rot_repr == "euler":
+                        left_rot = quat_to_euler(left_ee[:, 3:])
+                        right_rot = quat_to_euler(right_ee[:, 3:])
+                    # ⚠️ Euler delta 会有 wrap 问题（π → -π）
+                    if self.rot_repr == "euler":
+                        left_delta_rot = angle_diff(left_rot[1:], left_rot[:1])
+                        right_delta_rot = angle_diff(right_rot[1:], right_rot[:1])
+                    else:
+                        left_delta_rot = left_rot[1:] - left_rot[:1]
+                        right_delta_rot = right_rot[1:] - right_rot[:1]
+                    ee_diff = np.concatenate([
+                        left_delta_xyz,
+                        left_delta_rot,
+                        left_grip[1:, None],
+                        right_delta_xyz,
+                        right_delta_rot,
+                        right_grip[1:, None]
+                    ], axis=-1)
+                    action_seq = ee_diff
+                    # print('action_seq', action_seq.shape)
+                    index_list = list(range(0, action_seq.shape[0] - freq))
+
             elif dataset_name == 'robotwin2_rel_qpos':
-                freq = self.num_actions  # adjust if needed
-                left_joint = data["joint_action/left_arm"][()]      # shape (T, 7)
-                right_joint = data["joint_action/right_arm"][()]    # shape (T, 7)
-                left_grip = data["joint_action/left_gripper"][()]    # shape (T,)
-                right_grip = data["joint_action/right_gripper"][()]  # shape (T,)
+                freq = self.num_actions
+                left_joint = data["joint_action/left_arm"][()]      # (T, 7)
+                right_joint = data["joint_action/right_arm"][()]    # (T, 7)
+                left_grip = data["joint_action/left_gripper"][()]    # (T,)
+                right_grip = data["joint_action/right_gripper"][()]  # (T,)
                 prorpio_seq = np.concatenate([
-                    left_joint,                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_joint,                    # (T,7)
-                    right_grip[:, None]             # (T,1)
+                    left_joint,
+                    left_grip[:, None],
+                    right_joint,
+                    right_grip[:, None]
                 ], axis=-1)
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                joint_diff = np.concatenate([
-                    left_joint[1:] - left_joint[:-1],
-                    left_grip[1:, None],  # use future value directly
-                    right_joint[1:] - right_joint[:-1],
-                    right_grip[1:, None]
-                ], axis=-1)
-                # if not self.discretize:
-                #     action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # else:
-                action_seq = joint_diff
-                index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
-            elif dataset_name == 'real_abs_ee':
-                freq = self.num_actions  # adjust if needed
-                prorpio_seq = data['observations/eef_6d'][()]
-                # print('prorpio_seq', prorpio_seq)
-                action_seq = prorpio_seq[1:]
-                # if not self.discretize: # only do min max normalization (later) for discrete model
-                #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-            elif dataset_name == 'real_abs_qpos':
-                freq = self.num_actions  # adjust if needed
-                prorpio_seq = data['observations/qpos'][()]
-                # print('prorpio_seq', prorpio_seq)
-                action_seq = prorpio_seq[1:]
-                # if not self.discretize: # only do min max normalization (later) for discrete model
-                #     action_seq = (action_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # print(f"Applying 90% dropout on proprio")
-                mask = torch.rand(prorpio_seq.shape[1]) > 0.9   # keep ~10% features
-                prorpio_seq = prorpio_seq * mask.numpy()
-                index_list = list(range(0, action_seq.shape[0] - self.num_actions))  # or adjust your window length as needed
-            elif dataset_name == 'real_rel_ee':
-                freq = self.num_actions  # adjust if needed
-                prorpio_seq = data['observations/eef_quaternion'][()]
-                left_ee = prorpio_seq[:, :7]
-                right_ee = prorpio_seq[:, 8:15]
-                left_grip = prorpio_seq[:, 7]
-                right_grip = prorpio_seq[:, 15]
-                prorpio_seq = np.concatenate([
-                    left_ee[:, :3],
-                    quat_to_rotate6D(left_ee[:, 3:]),                        # (T,7)
-                    left_grip[:, None],             # (T,1)
-                    right_ee[:, :3],
-                    quat_to_rotate6D(right_ee[:, 3:]),                       # (T,7)
-                    right_grip[:, None]             # (T,1)
-                ], axis=-1)
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
-                right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
-                left_delta_rot6d = cal_delta_rotate(left_ee[1:, 3:], left_ee[:-1, 3:])
-                right_delta_rot6d = cal_delta_rotate(right_ee[1:, 3:], right_ee[:-1, 3:])
-                ee_diff = np.concatenate([
-                    left_delta_xyz,
-                    left_delta_rot6d,
-                    left_grip[1:, None],   # future gripper value
-                    right_delta_xyz,
-                    right_delta_rot6d,
-                    right_grip[1:, None]
-                ], axis=-1)
-                # if not self.discretize: # only do min max normalization (later) for discrete model
-                #     action_seq = (ee_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # else:
-                action_seq = ee_diff
-                index_list = list(range(0, action_seq.shape[0] - freq))
-            elif dataset_name == 'real_rel_qpos':
-                freq = self.num_actions  # adjust if needed
-                prorpio_seq = data['observations/qpos'][()]
-                left_joint = prorpio_seq[:, :6]
-                right_joint = prorpio_seq[:, 7:13]
-                left_grip = prorpio_seq[:, 6]
-                right_grip = prorpio_seq[:, 13]
-                # prorpio_seq = (prorpio_seq - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                joint_diff = np.concatenate([
-                    left_joint[1:] - left_joint[:-1],
-                    left_grip[1:, None],  # use future value directly
-                    right_joint[1:] - right_joint[:-1],
-                    right_grip[1:, None]
-                ], axis=-1)
-                # print('joint_diff')
-                # min_val = joint_diff.min(axis=0)
-                # max_val = joint_diff.max(axis=0)
-                # print('joint_diff min max', min_val, max_val)
-                # if not self.discretize:
-                #     action_seq = (joint_diff - self.global_mean[None, :]) / (self.global_std[None, :] + 1e-8)
-                # else:
-                action_seq = joint_diff
-                # print(f"Applying 90% dropout on proprio")
-                mask = torch.rand(prorpio_seq.shape[1]) > 0.9   # keep ~10% features
-                prorpio_seq = prorpio_seq * mask.numpy()
-                index_list = list(range(0, action_seq.shape[0] - freq))  # or adjust your window length as needed
+                if not self.chunk_wise:
+                    joint_diff = np.concatenate([
+                        left_joint[1:] - left_joint[:-1],
+                        left_grip[1:, None],
+                        right_joint[1:] - right_joint[:-1],
+                        right_grip[1:, None]
+                    ], axis=-1)
+                    action_seq = joint_diff
+                    index_list = list(range(0, action_seq.shape[0] - freq))
+                else: # chunk_wise delta
+                    joint_diff = np.concatenate([
+                        left_joint[1:] - left_joint[:1],
+                        left_grip[1:, None],
+                        right_joint[1:] - right_joint[:1],
+                        right_grip[1:, None]
+                    ], axis=-1)
+                    action_seq = joint_diff
+                    index_list = list(range(0, action_seq.shape[0] - freq))
 
             else: raise NotImplementedError
             
@@ -347,7 +363,8 @@ def create_dataloader(
                  num_actions,
                  model_type,
                  num_bins,
-                 pt_path
+                 pt_path,
+                 config
                  ):
     return DataLoader(
             InfiniteDataReader(
@@ -357,7 +374,8 @@ def create_dataloader(
                  num_actions = num_actions,
                  model_type = model_type,
                  num_bins = num_bins,
-                 pt_path = pt_path
+                 pt_path = pt_path,
+                 config = config
                  ),
             batch_size=batch_size,
             num_workers=4,
