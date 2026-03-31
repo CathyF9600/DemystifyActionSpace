@@ -344,8 +344,7 @@ class BaseModel(nn.Module):
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
         print('delta_type', delta_type, 'rot_repr', rot_repr)
-        print('############# Normalizing proprio')
-        print('proprio', proprio[:5])
+        print('proprio', proprio.shape)
         proprio_norm, _ = self.normalizer.normalize(proprio, action_seq=None)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
@@ -361,8 +360,8 @@ class BaseModel(nn.Module):
             print('action_scale', self.action_scale)
             denorm_action = self.normalizer.denormalize(pred_action)
             if delta_type == "chunk": # delta
-                print('denorm_action.cpu().numpy()', denorm_action.cpu().numpy()[:5,:])
-                print('proprio[None, :].cpu().numpy()', proprio[None, :].cpu().numpy())
+                # print('denorm_action.cpu().numpy()', denorm_action.cpu().numpy()[:5,:])
+                # print('proprio[None, :].cpu().numpy()', proprio[None, :].cpu().numpy())
                 action_sum = denorm_action.cpu().numpy() + proprio[None, :].cpu().numpy()
                 if rot_repr == "rot6d":
                     action_sum[:, :, 9] = denorm_action[:,:, 9].cpu().numpy()
@@ -373,15 +372,43 @@ class BaseModel(nn.Module):
                     action_sum[:, :, 15] = denorm_action[:, :, 15].cpu().numpy()
                     action_sum = quat_to_rotate6D(action_sum.squeeze())
                 elif rot_repr == "euler" or rot_repr is None:  # joint (qpos rel)
+                    
                     action_sum[:, :, 6] = denorm_action[:, :, 6].cpu().numpy()
                     action_sum[:, :, 13] = denorm_action[:, :, 13].cpu().numpy()
                     if rot_repr == "euler":
                         action_sum = euler_to_rotate6D(action_sum.squeeze())
                     else:
+                        print('rot_repr is None!!!!!!!!')
                         action_sum = action_sum.squeeze()
+                return action_sum
             elif delta_type == "step":
-                print('action_sum', action_sum[:5], action_sum.shape)
-                return torch.from_numpy(action_sum)
+                if proprio.shape[-1] == 14: # joint
+                    # denorm_action = np.asarray(denorm_action).reshape(-1, 14)
+                    left_qpos_start = proprio[:, :6]
+                    # left_grip_start = proprio_start[:, 6]
+                    right_qpos_start = proprio[:, 7:13]
+                    # right_grip_start = proprio_start[:, 12:13]
+                    print('denorm_action', denorm_action.shape, 'proprio', proprio.shape)
+                    left_qpos_del = denorm_action[:, :, :6]
+                    left_grip_del = denorm_action[:, :, 6:7].cpu().numpy()
+                    right_qpos_del = denorm_action[:, :, 7:13]
+                    right_grip_del = denorm_action[:, :, 13:14].cpu().numpy()
+                    print('left_qpos_del',left_qpos_del.shape, left_grip_del.shape)
+                    left_qpos = left_qpos_start.cpu().numpy() + np.cumsum(left_qpos_del.cpu().numpy(), axis=1)
+                    right_qpos = right_qpos_start.cpu().numpy() + np.cumsum(right_qpos_del.cpu().numpy(), axis=1)
+                    future_seq = np.concatenate([left_qpos, left_grip_del, right_qpos, right_grip_del], axis =-1)
+                    print('future_seq', future_seq.shape)
+                elif proprio.shape[-1] == 20: # ee
+                    left_ee_start = proprio[:, :9]
+                    right_ee_start = proprio[:, 10:19]
+                    left_ee_del = denorm_action[:, :, :9]
+                    left_grip_del = denorm_action[:, :, 9:10].cpu().numpy()
+                    right_ee_del = denorm_action[:, :, 10:19]
+                    right_grip_del = denorm_action[:, :, 19:20].cpu().numpy()
+                    left_ee = left_ee_start.cpu().numpy() + np.cumsum(left_ee_del.cpu().numpy(), axis=1)
+                    right_ee = right_ee_start.cpu().numpy() + np.cumsum(right_ee_del.cpu().numpy(), axis=1)
+                    future_seq = np.concatenate([left_ee, left_grip_del, right_ee, right_grip_del], axis =-1)
+                return future_seq
             return denorm_action # absolute
         elif self.model_type == 'discrete':
             pred_action = self.decoder(      
