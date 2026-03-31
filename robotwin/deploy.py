@@ -54,7 +54,9 @@ class DeployModel:
                  model_name = "model_base",
                  device = "cuda",
                  num_bins = 1,
-                 norm_action = False
+                 norm_action = False,
+                 delta_type = None,
+                 rot_repr = None
                 ):
         self.device = device
         self.model_name = model_name
@@ -72,6 +74,9 @@ class DeployModel:
         ])
 
         self.num_bins = num_bins
+        self.first_action = None
+        self.delta_type = delta_type
+        self.rot_repr = rot_repr
 
     def dequantize_action(self, quantized_action):
         quantized_action = np.asarray(quantized_action.cpu(), dtype=np.float32)
@@ -125,7 +130,6 @@ class DeployModel:
         return action_sum.squeeze()
 
     def infer(self, payload: Dict[str, Any]):
-        print('norm_action', self.norm_action)
         try:  
             self.model.eval()
             image_list = []        
@@ -137,15 +141,18 @@ class DeployModel:
             image_input =  torch.stack([self.image_aug(img) for img in image_list])
 
             proprio = np.array(json_numpy.loads(payload['proprio']))
+            if type(self.first_action) is not np.ndarray:
+                self.first_action = proprio
             print('client proprio', proprio)
             if 'rel' in self.model_name:
                 inputs = {
                     'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
                     'images': torch.tensor(image_input).to(torch.float32).unsqueeze(0).cuda(non_blocking=True),
                     'proprio':  torch.tensor(proprio).to(torch.float32).unsqueeze(0).cuda(non_blocking=True), # normalized proprio
-                    'chunk_wise_delta': True,
-                    # 'rot_repr': 'rot6d'
+                    'delta_type': self.delta_type,
+                    'rot_repr': self.rot_repr
             }
+        
             else:
                 inputs = {
                     'encoded_language': torch.tensor(language_inputs).to(torch.float32).cuda(non_blocking=True),
@@ -192,9 +199,9 @@ def main():
     parser.add_argument('--norm_action', default=False, type=bool, help='load ckpt path')
     parser.add_argument("--host", default='0.0.0.0', help="Your client host ip")
     parser.add_argument("--port", default=8000, type=int, help="Your client port")
-    parser.add_argument("--stats_path", default='', type=str, help="Your global stats file for relative data / discrete models")
+    parser.add_argument('--delta_type', type=str, default=None, choices=["chunk", "step"], help="Delta type")
+    parser.add_argument('--rot_repr', type=str, default=None, choices=["rot6d", "quat", "euler"], help="Rotation representation")
 
-    
     args = parser.parse_args()
     kwargs = vars(args)
     ckpt_path = os.path.join(kwargs['ckpt_path'], 'model.safetensors')
@@ -206,7 +213,9 @@ def main():
         ckpt_path = ckpt_path,
         model_name = args.model_name,
         num_bins = 1,
-        norm_action = args.norm_action
+        norm_action = args.norm_action,
+        delta_type = args.delta_type,
+        rot_repr = args.rot_repr
     )  
     server.run(host=kwargs['host'], port=kwargs['port'])
     

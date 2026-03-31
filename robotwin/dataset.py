@@ -26,6 +26,7 @@ def decode_image_from_bytes(camera_rgb_image):
             rgb = rgb.reshape(720, 1280, 3) 
         elif rgb.size == 921600: 
             rgb = rgb.reshape(480, 640, 3)
+    # print('rgb', rgb)
     return Image.fromarray(rgb)
 
 def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
@@ -145,8 +146,8 @@ class InfiniteDataReader(IterableDataset):
             self.metas[meta['dataset_name']] = meta
         # augmentations
         self.image_aug = transforms.Compose([
-            # transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
-            transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
+            transforms.Resize((224, 224), interpolation=InterpolationMode.BICUBIC),
+            #transforms.RandomResizedCrop((224, 224), scale = (0.8, 1.0),ratio=(1.0, 1.0), interpolation=InterpolationMode.BICUBIC),
             transforms.ColorJitter(brightness=0.4, contrast=0.3, saturation=0.3, hue=0.),
             transforms.ToTensor(),
             transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225), inplace=True)
@@ -251,6 +252,7 @@ class InfiniteDataReader(IterableDataset):
                 ], axis=-1)
                 # ===== delta =====
                 if not self.chunk_wise:
+                    print('performing step delta ee')
                     left_delta_xyz = left_ee[1:, :3] - left_ee[:-1, :3]
                     right_delta_xyz = right_ee[1:, :3] - right_ee[:-1, :3]
                     # 统一：rotation 全部直接减
@@ -298,6 +300,7 @@ class InfiniteDataReader(IterableDataset):
                     right_grip[:, None]
                 ], axis=-1)
                 if not self.chunk_wise:
+                    print('performing step delta joint')
                     joint_diff = np.concatenate([
                         left_joint[1:] - left_joint[:-1],
                         left_grip[1:, None],

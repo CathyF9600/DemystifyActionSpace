@@ -7,6 +7,9 @@ from typing import List
 from transformers import AutoTokenizer, SiglipTextModel
 from timm.models.vision_transformer import Mlp
 import math
+from scipy.spatial.transform import Rotation as R
+import numpy as np
+
 
 print("model init")
 
@@ -16,38 +19,124 @@ def basic_init(module):
         if module.bias is not None:
             nn.init.constant_(module.bias, 0)    
 
+def quat_to_rotate6D(q: np.ndarray) -> np.ndarray:
+    return R.from_quat(q).as_matrix()[..., :, :2].reshape(q.shape[:-1] + (6,))
+
+def euler_to_rotate6D(euler: np.ndarray) -> np.ndarray:
+    """
+    euler: (..., 3)  # xyz order, radians
+    return: (..., 6)
+    """
+    rotmat = R.from_euler('xyz', euler).as_matrix()  # (..., 3, 3)
+    return rotmat[..., :, :2].reshape(euler.shape[:-1] + (6,))
+
+def normalize_p5_p95(x, p5, p95, eps=1e-6):
+    """原始空间线性缩放，与 mean/std 无关： (x - p5) / (p95 - p5 + eps)"""
+    return (x - p5) / (p95 - p5 + eps)
+
+
+def denormalize_p5_p95(y, p5, p95, eps=1e-6):
+    """normalize_p5_p95 的逆： y * (p95 - p5 + eps) + p5"""
+    return y * (p95 - p5 + eps) + p5
+
+
 class Normalizer(nn.Module):
-    def __init__(self, dim_proprio=14, dim_actions=14, normalize_proprio=False, normalize_action=True):
+    """
+    三种对比设置：
+    - mean/std：normalize_proprio/action=True, use_p95_minmax=False
+    - p5/p95 线性（原始空间，独立于 mean/std）：use_p95_minmax=True，仅用 (x-p5)/(p95-p5+eps)
+    - 无归一化：normalize_proprio=False, normalize_action=False
+    """
+
+    def __init__(
+        self,
+        dim_proprio=14,
+        dim_actions=14,
+        normalize_proprio=False,
+        normalize_action=True,
+        use_p95_minmax=False,
+    ):
         super().__init__()
         self.normalize_proprio = normalize_proprio
         self.normalize_action = normalize_action
+        self.use_p95_minmax = use_p95_minmax
 
-        # correct shapes
         self.register_buffer("proprio_mean", torch.zeros(dim_proprio))
         self.register_buffer("proprio_std", torch.ones(dim_proprio))
         self.register_buffer("action_mean", torch.zeros(dim_actions))
         self.register_buffer("action_std", torch.ones(dim_actions))
+        self.register_buffer("proprio_p5", torch.zeros(dim_proprio))
+        self.register_buffer("proprio_p95", torch.ones(dim_proprio))
+        self.register_buffer("action_p5", torch.zeros(dim_actions))
+        self.register_buffer("action_p95", torch.ones(dim_actions))
+        # 训练时 set_dataset_stats 后置 1；resume 时若 ckpt 含此 buffer 可跳过 compute_mean_std
+        self.register_buffer("_stats_fitted", torch.tensor(0, dtype=torch.uint8))
 
-    def set_dataset_stats(self, mean, std):
-        self.proprio_mean.copy_(torch.tensor(mean["proprio"]))
-        self.proprio_std.copy_(torch.tensor(std["proprio"]))
-        self.action_mean.copy_(torch.tensor(mean["action"]))
-        self.action_std.copy_(torch.tensor(std["action"]))
+    def set_dataset_stats(
+        self,
+        mean,
+        std,
+        proprio_p5=None,
+        proprio_p95=None,
+        action_p5=None,
+        action_p95=None,
+    ):
+        self.proprio_mean.copy_(torch.tensor(mean["proprio"], dtype=torch.float32))
+        self.proprio_std.copy_(torch.tensor(std["proprio"], dtype=torch.float32))
+        self.action_mean.copy_(torch.tensor(mean["action"], dtype=torch.float32))
+        self.action_std.copy_(torch.tensor(std["action"], dtype=torch.float32))
+        if self.use_p95_minmax:
+            assert proprio_p5 is not None and proprio_p95 is not None
+            assert action_p5 is not None and action_p95 is not None
+            self.proprio_p5.copy_(torch.tensor(proprio_p5, dtype=torch.float32))
+            self.proprio_p95.copy_(torch.tensor(proprio_p95, dtype=torch.float32))
+            self.action_p5.copy_(torch.tensor(action_p5, dtype=torch.float32))
+            self.action_p95.copy_(torch.tensor(action_p95, dtype=torch.float32))
+        self._stats_fitted.fill_(1)
 
     def normalize(self, proprio, action_seq=None):
         # print("proprio_mean", self.proprio_mean[None], "proprio_std", self.proprio_std[None])
-        if self.normalize_proprio and proprio is not None:
-            proprio = (proprio - self.proprio_mean[None]) / (self.proprio_std[None] + 1e-6)
+        proprio_norm = proprio.clone()
+        if self.normalize_proprio and proprio_norm is not None:
+            if self.use_p95_minmax:
+                proprio_norm = normalize_p5_p95(
+                    proprio_norm,
+                    self.proprio_p5[None, :],
+                    self.proprio_p95[None, :],
+                )
+            else:
+                proprio_norm = (proprio_norm - self.proprio_mean[None]) / (
+                    self.proprio_std[None] + 1e-6
+                )
 
         if self.normalize_action and action_seq is not None:
-            action_seq = (action_seq - self.action_mean[None, None, :]) / (self.action_std[None, None, :] + 1e-6)
+            if self.use_p95_minmax:
+                action_seq = normalize_p5_p95(
+                    action_seq,
+                    self.action_p5[None, None, :],
+                    self.action_p95[None, None, :],
+                )
+            else:
+                action_seq = (action_seq - self.action_mean[None, None, :]) / (
+                    self.action_std[None, None, :] + 1e-6
+                )
 
-        return proprio, action_seq
-    
+        return proprio_norm, action_seq
+
     def denormalize(self, action_seq):
-        print('################# in model: denormalize')
-        action_seq = action_seq * (self.action_std[None, None, :] + 1e-6) + self.action_mean[None, None, :]
-        return action_seq
+        # print("action_mean", self.action_mean[None], "action_std", self.action_std[None])
+        print("################# in model: denormalize")
+        if not self.normalize_action:
+            return action_seq
+        if self.use_p95_minmax:
+            return denormalize_p5_p95(
+                action_seq,
+                self.action_p5[None, None, :],
+                self.action_p95[None, None, :],
+            )
+        return action_seq * (self.action_std[None, None, :] + 1e-6) + self.action_mean[
+            None, None, :
+        ]
 
 class TimeEmbedder(nn.Module):
     def __init__(self, hidden_size, frequency_embedding_size=256):
@@ -164,10 +253,17 @@ class BaseModel(nn.Module):
                     num_views = 1,
                     normalize_proprio = False,
                     normalize_action = False,
+                    use_p95_minmax=False,
                  **kwargs
                  ):
         super().__init__()
-        self.normalizer = Normalizer(dim_proprio=dim_proprio, dim_actions=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
+        self.normalizer = Normalizer(
+            dim_proprio=dim_proprio,
+            dim_actions=dim_actions,
+            normalize_proprio=normalize_proprio,
+            normalize_action=normalize_action,
+            use_p95_minmax=use_p95_minmax,
+        )
         print('action scale', action_scale)
         self.action_scale = action_scale
         self.model_type = model_type
@@ -241,11 +337,16 @@ class BaseModel(nn.Module):
                 images: torch.Tensor, # B V C H W
                 encoded_language: torch.Tensor, # B C
                 proprio: torch.Tensor,
-                steps = 5
+                steps = 5,
+                delta_type = None,
+                rot_repr=None,
+                first_action=None
             ):
         # print('xxxxxxxxxxxxxxxxxx image', images.shape, encoded_language.shape, proprio.shape)
+        print('delta_type', delta_type, 'rot_repr', rot_repr)
         print('############# Normalizing proprio')
-        proprio, _ = self.normalizer.normalize(proprio, action_seq=None)
+        print('proprio', proprio[:5])
+        proprio_norm, _ = self.normalizer.normalize(proprio, action_seq=None)
         B, V, C, H, W = images.shape
         vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
         vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
@@ -255,10 +356,33 @@ class BaseModel(nn.Module):
             pred_action = self.decoder(
                         visual_feature = vision_embedding,
                         language_feature = encoded_language,
-                        proprio = proprio)
+                        proprio = proprio_norm)
             pred_action /= self.action_scale
-            denorm_output = self.normalizer.denormalize(pred_action)
-            return denorm_output # denoised action
+            print('action_scale', self.action_scale)
+            denorm_action = self.normalizer.denormalize(pred_action)
+            if delta_type == "chunk": # delta
+                print('denorm_action.cpu().numpy()', denorm_action.cpu().numpy()[:5,:])
+                print('proprio[None, :].cpu().numpy()', proprio[None, :].cpu().numpy())
+                action_sum = denorm_action.cpu().numpy() + proprio[None, :].cpu().numpy()
+                if rot_repr == "rot6d":
+                    action_sum[:, :, 9] = denorm_action[:,:, 9].cpu().numpy()
+                    action_sum[:, :, 19] = denorm_action[:, :, 19].cpu().numpy()
+                    action_sum = action_sum.squeeze()
+                elif rot_repr == "quat":
+                    action_sum[:, :, 7] = denorm_action[:,:, 7].cpu().numpy()
+                    action_sum[:, :, 15] = denorm_action[:, :, 15].cpu().numpy()
+                    action_sum = quat_to_rotate6D(action_sum.squeeze())
+                elif rot_repr == "euler" or rot_repr is None:  # joint (qpos rel)
+                    action_sum[:, :, 6] = denorm_action[:, :, 6].cpu().numpy()
+                    action_sum[:, :, 13] = denorm_action[:, :, 13].cpu().numpy()
+                    if rot_repr == "euler":
+                        action_sum = euler_to_rotate6D(action_sum.squeeze())
+                    else:
+                        action_sum = action_sum.squeeze()
+            elif delta_type == "step":
+                print('action_sum', action_sum[:5], action_sum.shape)
+                return torch.from_numpy(action_sum)
+            return denorm_action # absolute
         elif self.model_type == 'discrete':
             pred_action = self.decoder(      
                     visual_feature = vision_embedding,
@@ -276,8 +400,8 @@ class BaseModel(nn.Module):
                             noise_action = action_with_noise, # B num_action_chunk dim_action
                             t = time)
                 action_with_noise = action_with_noise - (action_with_noise - pred_action / self.action_scale) / time.view(B, 1, 1) / steps
-            denorm_output = self.normalizer.denormalize(action_with_noise)
-            return denorm_output # denoised action
+            denorm_action = self.normalizer.denormalize(action_with_noise)
+            return denorm_action # denoised action
         return pred_action
 
 def get_positional_embeddings(seq_length, d_model):
@@ -289,130 +413,6 @@ def get_positional_embeddings(seq_length, d_model):
     pe = pe.unsqueeze(0)
     return pe
 
-class ACT(nn.Module):
-    def __init__(self,
-                hidden_dim = 512,
-                dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 30,
-
-                vision_backbone = "resnet18.a1_in1k",
-                dim_language = 768,
-
-                action_scale = 1,
-                num_views = 3,
-                normalize_proprio = False,
-                normalize_action = False
-                ):
-
-        super().__init__()
-        self.action_scale = action_scale
-        self.normalizer = Normalizer(dim_proprio=dim_proprio, dim_actions=dim_actions, normalize_proprio=normalize_proprio, normalize_action=normalize_action)
-        self.num_action_chunk = num_action_chunk
-        self.proprio_proj = nn.Linear(dim_proprio, hidden_dim)
-        self.lang_proj = nn.Linear(dim_language, hidden_dim)
-        
-        self.vision_backbone = create_model(vision_backbone, pretrained=False)
-        del self.vision_backbone.fc
-
-        self.action_head = nn.Sequential(
-                nn.LayerNorm(hidden_dim),
-                nn.Linear(hidden_dim, dim_actions))
-        
-        self.queries = nn.Parameter(torch.zeros(1, num_action_chunk, hidden_dim), requires_grad=True)
-        self.queries_pos_emb = nn.Parameter(get_positional_embeddings(num_action_chunk, hidden_dim), requires_grad=False)
-        self.input_pos_emb = nn.Parameter(get_positional_embeddings(49*num_views+2, hidden_dim), requires_grad=False)
-
-        assert hidden_dim % 64 == 0
-        self.model = nn.Transformer(
-            d_model=hidden_dim,
-            nhead=hidden_dim//64,
-            num_encoder_layers = 4,
-            num_decoder_layers = 2,
-            dim_feedforward = hidden_dim * 4,
-            dropout = 0.0,
-            batch_first = True,
-            norm_first = False,
-        )
-        self.loss = nn.HuberLoss(delta=0.1)
-
-    def forward(self, 
-                images: torch.Tensor,  # B V N C
-                encoded_language: torch.Tensor, # B, ua_dim
-                proprio: torch.Tensor, # B, prio_dim
-                action_seq: torch.Tensor):
-        proprio, action_seq = self.normalizer.normalize(proprio, action_seq)
-        B, V, C, H, W = images.shape
-        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
-        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
-        _, num_features, N = vision_embedding.shape
-        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
-
-        inputs = torch.cat(
-            [
-                vision_embedding.flatten(start_dim=1, end_dim=2),
-                self.lang_proj(encoded_language).unsqueeze(1),
-                self.proprio_proj(proprio).unsqueeze(1)
-            ], dim = 1
-        )
-        inputs = inputs + self.input_pos_emb
-        query = self.queries.repeat(B, 1, 1) + self.queries_pos_emb
-        
-        output = self.model.forward(inputs, query) # B ac hidden
-        output = self.action_head(output) # B ac 14
-        return self.loss(output, action_seq * self.action_scale)
-
-    def pred_action(self,
-                images: torch.Tensor, # B V C H W
-                encoded_language: torch.Tensor, # B C
-                proprio: torch.Tensor,
-                steps = 5
-            ):
-        proprio, _ = self.normalizer.normalize(proprio, action_seq=None)
-        B, V, C, H, W = images.shape
-        vision_embedding = self.vision_backbone.forward_features(images.view(B*V, C, H, W)) # B num_features H W
-        vision_embedding = vision_embedding.flatten(start_dim=-2) # B*V num_features N
-        _, num_features, N = vision_embedding.shape
-        vision_embedding = vision_embedding.permute(0, 2, 1).view(B, V, N, num_features)
-        inputs = torch.cat(
-                    [
-                        vision_embedding.flatten(start_dim=1, end_dim=2),
-                        self.lang_proj(encoded_language).unsqueeze(1),
-                        self.proprio_proj(proprio).unsqueeze(1)
-                    ], dim = 1
-                )
-        inputs = inputs + self.input_pos_emb
-        query = self.queries.repeat(B, 1, 1) + self.queries_pos_emb
-        
-        output = self.model.forward(inputs, query) # B ac hidden
-        output = self.action_head(output) 
-        denorm_output = self.normalizer.denormalize(output)
-        return denorm_output
-
-@register_model
-def ACT_3RGB_14DoFs_14Proprio_chunk30(pt_path = "encoded_language.pt",
-                                        **kwargs):
-    return ACT(dim_proprio = 14,
-                dim_actions = 14,
-                normalize_proprio = True,
-                normalize_action = True), language_encoder(pt_path=pt_path)
-
-@register_model
-def ACT_2RGB_14DoFs_14Proprio_chunk30(pt_path = "lang_emb_cube_cup.pt",
-                                        **kwargs):
-    return ACT(dim_proprio = 14,
-                dim_actions = 14,
-                normalize_proprio = True,
-                normalize_action = True,
-                num_views = 2), language_encoder(pt_path=pt_path)
-
-@register_model
-def ACT_3RGB_20DoFs_20Proprio_chunk30(pt_path = "encoded_language.pt",
-                                        **kwargs):
-    return ACT(dim_proprio = 20,
-                dim_actions = 20,
-                normalize_proprio = True,
-                normalize_action = True), language_encoder(pt_path=pt_path)
 
 
 @register_model
@@ -965,7 +965,7 @@ def model_rel_qpos_dis(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
 
 ########################### Rebuttal for normalization - mean std ###########################
 @register_model
-def abs_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+def abs_ee_cnt_mean(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 30,
                 pt_path = "encoded_language.pt",
@@ -1003,7 +1003,7 @@ def abs_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
     return model, language_encoder(pt_path=pt_path)
 
 @register_model
-def rel_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
+def rel_ee_cnt_mean(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
                 dim_actions = 20, # 14 for euler angles
                 num_action_chunk = 30,
                 pt_path = "encoded_language.pt",
@@ -1040,83 +1040,193 @@ def rel_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
     )
     return model, language_encoder(pt_path=pt_path)
 
-########################### Rebuttal for normalization - min max ###########################
+########################### mean/std + z-space p5–p95 (minmax) ###########################
+
+
 @register_model
-def abs_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 30,
-                pt_path = "encoded_language.pt",
-                **kwargs):
+def abs_ee_cnt_minmax_rot(
+    dim_proprio=20,
+    dim_actions=20,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
     model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        normalize_proprio = True,
-        normalize_action = True
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=True,
+        normalize_action=True,
+        use_p95_minmax=True,
     )
     return model, language_encoder(pt_path=pt_path)
 
+
 @register_model
-def abs_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 30,
-                pt_path = "encoded_language.pt",
-                **kwargs):
+def abs_qpos_cnt_minmax(
+    dim_proprio=14,
+    dim_actions=14,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
     model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        normalize_proprio = True,
-        normalize_action = True
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=True,
+        normalize_action=True,
+        use_p95_minmax=True,
     )
     return model, language_encoder(pt_path=pt_path)
 
+
 @register_model
-def rel_ee_cnt_mean_rot(dim_proprio = 20, # 14 for euler angles, 20 for rot6d
-                dim_actions = 20, # 14 for euler angles
-                num_action_chunk = 30,
-                pt_path = "encoded_language.pt",
-                **kwargs):
+def rel_ee_cnt_minmax_rot(
+    dim_proprio=20,
+    dim_actions=20,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
     model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        normalize_proprio = True,
-        normalize_action = True
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=True,
+        normalize_action=True,
+        use_p95_minmax=True,
     )
     return model, language_encoder(pt_path=pt_path)
 
+
 @register_model
-def rel_qpos_cnt_mean(dim_proprio = 14, # 14 for euler angles, 20 for rot6d
-                dim_actions = 14, # 14 for euler angles
-                num_action_chunk = 30,
-                pt_path = "encoded_language.pt",
-                **kwargs):
+def rel_qpos_cnt_minmax(
+    dim_proprio=14,
+    dim_actions=14,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
     model = BaseModel(
-        vision_backbone = "resnet18.a1_in1k",
-        model_type = "continuous",
-        dim_language = 768,
-        dim_proprio = dim_proprio, # 14 for euler angles, 20 for rot6d
-        dim_actions = dim_actions, # 14 for euler angles
-        num_action_chunk = num_action_chunk,
-        action_scale = 100,
-        normalize_proprio = True,
-        normalize_action = True
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=True,
+        normalize_action=True,
+        use_p95_minmax=True,
     )
     return model, language_encoder(pt_path=pt_path)
 
+########################### 无归一化（原始 proprio / action，denorm 恒等） ###########################
+
+
+@register_model
+def abs_ee_cnt_rot(
+    dim_proprio=20,
+    dim_actions=20,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
+    model = BaseModel(
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=False,
+        normalize_action=False,
+        use_p95_minmax=False,
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+
+@register_model
+def abs_qpos_cnt(
+    dim_proprio=14,
+    dim_actions=14,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
+    model = BaseModel(
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=False,
+        normalize_action=False,
+        use_p95_minmax=False,
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+
+@register_model
+def rel_ee_cnt_rot(
+    dim_proprio=20,
+    dim_actions=20,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
+    model = BaseModel(
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=False,
+        normalize_action=False,
+        use_p95_minmax=False,
+    )
+    return model, language_encoder(pt_path=pt_path)
+
+
+@register_model
+def rel_qpos_cnt(
+    dim_proprio=14,
+    dim_actions=14,
+    num_action_chunk=30,
+    pt_path="encoded_language.pt",
+    **kwargs,
+):
+    model = BaseModel(
+        vision_backbone="resnet18.a1_in1k",
+        model_type="continuous",
+        dim_language=768,
+        dim_proprio=dim_proprio,
+        dim_actions=dim_actions,
+        num_action_chunk=num_action_chunk,
+        action_scale=100,
+        normalize_proprio=False,
+        normalize_action=False,
+        use_p95_minmax=False,
+    )
+    return model, language_encoder(pt_path=pt_path)
 
 
 # if __name__ == "__main__":
