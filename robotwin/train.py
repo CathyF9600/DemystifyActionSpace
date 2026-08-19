@@ -743,6 +743,7 @@ def main(args):
         args.model,
         dim_proprio=proprio_dim,
         dim_actions=proprio_dim,
+        pt_path=args.pt_path,
     )
     if args.resume is not None and args.pretrained is not None:
         accelerator.print(">>>>>> 已指定 --resume，将忽略 --pretrained")
@@ -920,3 +921,5 @@ if __name__ == '__main__':
             config=vars(args)
         )
     main(args)
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()

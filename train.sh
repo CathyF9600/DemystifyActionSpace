@@ -1,4 +1,4 @@
-python train.py \
+${PYTHON:-python3} train.py \
     --model model_abs_ee_act \
     --epochs 2000 \
     --sample_num 10000 \
