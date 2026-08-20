@@ -85,7 +85,7 @@ setup(
         "dm_control",
         "opencv-python",
         "einops",
-        "ipython"
+        "ipython",
         "json_numpy",
         "uvicorn",
         "fastapi"

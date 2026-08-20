@@ -46,7 +46,7 @@ class MapstyleDataReader(Dataset):
                 meta = json.load(f)
                 print(f"================detect dataset with traj {len(meta['datalist'])}==================")
                 rng = np.random.default_rng(0)
-                random.shuffle(meta['datalist'], rng.random)
+                rng.shuffle(meta['datalist'])
                 print(meta['datalist'][:sample_num][:2])
                 # for data_path, len_data in meta['datalist'][:sample_num]: 
                 #     print(f"===load data {data_path}===")

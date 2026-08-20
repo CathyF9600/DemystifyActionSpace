@@ -22,6 +22,8 @@ The goal is to provide a simple benchmark for analyzing how action representatio
 
 `bash train.sh`
 
+For a full data-download walkthrough covering the real-world `touch` task and a RoboTwin sample task, see [`docs/training_data_walkthrough.md`](docs/training_data_walkthrough.md).
+
 ## Evaluate
 
 `bash server.sh`

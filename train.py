@@ -93,7 +93,8 @@ def main(args):
     accelerator.print(f"Start training for {args.epochs} ep")
     iters = 0
     for epoch in range(args.epochs):
-        train_dataloader.sampler.set_epoch(epoch)        
+        if hasattr(train_dataloader.sampler, "set_epoch"):
+            train_dataloader.sampler.set_epoch(epoch)
         for data in train_dataloader:
             past_time = time.time()
             model.train()
@@ -217,6 +218,8 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.output_dir:
         Path(args.output_dir).mkdir(parents=True, exist_ok=True)
+    # Accelerator handles local and launcher-managed distributed runs.
+    # Do not call main twice; that reruns training and reinitializes NCCL.
     main(args)
-    # main(slurm_env_init(args))
-    main(init_distributed_mode(args))
+    if torch.distributed.is_available() and torch.distributed.is_initialized():
+        torch.distributed.destroy_process_group()
